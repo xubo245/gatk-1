@@ -117,13 +117,18 @@ public final class FindBreakpointEvidenceSparkUnitTest extends BaseTest {
                 .forEach(qNameMultiMap::add);
         final String expectedFile = fastqFile;
         FindBreakpointEvidenceSpark.generateFastqs(ctx, qNameMultiMap, reads, 2, true,
-                intervalAndFastqBytes -> compareFastqs(intervalAndFastqBytes, expectedFile));
+                intervalAndReads -> compareFastqs(intervalAndReads, expectedFile));
     }
 
     private static Tuple2<Integer, String> compareFastqs(
-            final Tuple2<Integer, List<byte[]>> intervalAndFastqBytes,
+            final Tuple2<Integer, List<GATKRead>> intervalAndFastqBytes,
             final String fastqFile ) {
-        final List<byte[]> fastqList = intervalAndFastqBytes._2;
+        final List<GATKRead> readsList = intervalAndFastqBytes._2;
+        final List<byte[]> fastqList =
+                readsList
+                        .stream()
+                        .map(read -> SVFastqUtils.readToFastqRecord(read, true))
+                        .collect(SVUtils.arrayListCollector(readsList.size()));
         SVFastqUtils.sortFastqRecords(fastqList);
         final byte[] concatenatedFastqs = new byte[fastqList.stream().mapToInt(fastq -> fastq.length).sum()];
         int idx = 0;

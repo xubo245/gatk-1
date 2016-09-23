@@ -9,6 +9,7 @@ import com.google.common.annotations.VisibleForTesting;
 import htsjdk.samtools.*;
 import org.apache.commons.collections4.iterators.SingletonIterator;
 import org.apache.spark.HashPartitioner;
+import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.broadcast.Broadcast;
@@ -195,7 +196,7 @@ public final class FindBreakpointEvidenceSpark extends GATKSparkTool {
         final boolean includeMapLoc = includeMappingLocation;
         intervalDispositions.putAll(
                 generateFastqs(ctx, qNamesMultiMap, allPrimaryLines, intervals.size(), includeMapLoc,
-                                intervalAndFastqBytes -> writeFastq(intervalAndFastqBytes, outDir, maxFastqSize)));
+                                intervalAndReadList -> writeFastq(intervalAndReadList, outDir, maxFastqSize, includeMapLoc)));
 
         // record the intervals
         if ( locations.intervalFile != null ) {
@@ -379,51 +380,62 @@ public final class FindBreakpointEvidenceSpark extends GATKSparkTool {
                                        final JavaRDD<GATKRead> reads,
                                        final int nIntervals,
                                        final boolean includeMappingLocation,
-                                       final org.apache.spark.api.java.function.Function<Tuple2<Integer, List<byte[]>>, Tuple2<Integer, String>> fastqHandler) {
+                                       final org.apache.spark.api.java.function.Function<Tuple2<Integer, List<GATKRead>>, Tuple2<Integer, String>> fastqHandler) {
         final Broadcast<HopscotchUniqueMultiMap<String, Integer, QNameAndInterval>> broadcastQNamesMultiMap =
                 ctx.broadcast(qNamesMultiMap);
-        final int nPartitions = reads.partitions().size();
 
-        final Map<Integer, String> intervalDispositions =
-            reads
-                .mapPartitionsToPair(readItr ->
-                        new ReadsForQNamesFinder(broadcastQNamesMultiMap.value(), nIntervals,
-                                includeMappingLocation).call(readItr), false)
-                .combineByKey(x -> x,
-                                FindBreakpointEvidenceSpark::combineLists,
-                                FindBreakpointEvidenceSpark::combineLists,
-                                new HashPartitioner(nPartitions), false, null)
-                .map(fastqHandler)
-                .collect()
-                .stream()
-                .collect(Collectors.toMap(Tuple2::_1, Tuple2::_2));
+        final int nPartitions = reads.partitions().size();
+        final List<Tuple2<Integer, String>> intervalDispositions =
+                reads
+                    .mapPartitionsToPair(readItr ->
+                            new ReadsForQNamesFinder(broadcastQNamesMultiMap.value(), nIntervals).call(readItr), false)
+                    .combineByKey(x -> x,
+                            FindBreakpointEvidenceSpark::combineLists,
+                            FindBreakpointEvidenceSpark::combineLists,
+                            new HashPartitioner(nPartitions), false, null)
+                    .map(fastqHandler)
+                    .collect();
 
         broadcastQNamesMultiMap.destroy();
 
-        return intervalDispositions;
+        return intervalDispositions
+                .stream()
+                .collect(Collectors.toMap(Tuple2::_1, Tuple2::_2));
     }
 
     /** Concatenate two lists. */
-    private static List<byte[]> combineLists( final List<byte[]> list1, final List<byte[]> list2 ) {
-        final List<byte[]> result = new ArrayList<>(list1.size() + list2.size());
+    private static List<GATKRead> combineLists( final List<GATKRead> list1, final List<GATKRead> list2 ) {
+        final List<GATKRead> result = new ArrayList<>(list1.size() + list2.size());
         result.addAll(list1);
         result.addAll(list2);
         return result;
     }
 
     /** write a FASTQ file for an assembly */
-    @VisibleForTesting static Tuple2<Integer, String> writeFastq( final Tuple2<Integer, List<byte[]>> intervalAndFastqs,
-                                    final String outputDir, final int maxFastqSize ) {
-        final List<byte[]> fastqsList = intervalAndFastqs._2;
+    @VisibleForTesting static Tuple2<Integer, String> writeFastq(
+            final Tuple2<Integer, List<GATKRead>> intervalAndFastqs,
+            final String outputDir,
+            final int maxFastqSize,
+            final boolean includeMappingLocation ) {
+        final List<GATKRead> readsList = intervalAndFastqs._2();
+
+        final List<byte[]> fastqsList =
+                readsList
+                        .stream()
+                        .map(read -> SVFastqUtils.readToFastqRecord(read, includeMappingLocation))
+                .collect(SVUtils.arrayListCollector(readsList.size()));
         SVFastqUtils.sortFastqRecords(fastqsList);
 
         final int fastqSize = fastqsList.stream().mapToInt(fastqRec -> fastqRec.length).sum();
         final String disposition;
         if ( fastqSize > maxFastqSize ) disposition = "FASTQ not written -- too big (" + fastqSize + " bytes).";
         else {
-            final String fileName = outputDir + "/assembly" + intervalAndFastqs._1() + ".fastq";
-            SVFastqUtils.writeFastqFile(fileName, null, fastqsList);
-            disposition = fileName;
+            final String baseName = outputDir + "/assembly" + intervalAndFastqs._1();
+            final String fastqName = baseName + ".fastq";
+            SVFastqUtils.writeFastqFile(fastqName, null, fastqsList);
+            disposition = fastqName;
+
+            new FermiLiteAssembler().createAssembly(readsList).writeGFA(baseName + ".graph", null);
         }
         return new Tuple2<>(intervalAndFastqs._1(), disposition);
     }
@@ -1283,39 +1295,35 @@ public final class FindBreakpointEvidenceSpark extends GATKSparkTool {
         private final HopscotchUniqueMultiMap<String, Integer, QNameAndInterval> qNamesMultiMap;
         private final int nIntervals;
         private final int nReadsPerInterval;
-        private final boolean includeMappingLocation;
 
         ReadsForQNamesFinder( final HopscotchUniqueMultiMap<String, Integer, QNameAndInterval> qNamesMultiMap,
-                              final int nIntervals, final boolean includeMappingLocation ) {
+                              final int nIntervals ) {
             this.qNamesMultiMap = qNamesMultiMap;
             this.nIntervals = nIntervals;
             this.nReadsPerInterval = 2*qNamesMultiMap.size()/nIntervals;
-            this.includeMappingLocation = includeMappingLocation;
         }
 
-        public Iterable<Tuple2<Integer, List<byte[]>>> call( final Iterator<GATKRead> readsItr ) {
+        public Iterable<Tuple2<Integer, List<GATKRead>>> call( final Iterator<GATKRead> readsItr ) {
             @SuppressWarnings({"unchecked", "rawtypes"})
-            final List<byte[]>[] intervalReads = new List[nIntervals];
+            final List<GATKRead>[] intervalReads = new List[nIntervals];
             int nPopulatedIntervals = 0;
             while ( readsItr.hasNext() ) {
                 final GATKRead read = readsItr.next();
                 final String readName = read.getName();
                 final Iterator<QNameAndInterval> namesItr = qNamesMultiMap.findEach(readName);
-                byte[] fastqBytes = null;
                 while ( namesItr.hasNext() ) {
-                    if ( fastqBytes == null ) fastqBytes = SVFastqUtils.readToFastqRecord(read, includeMappingLocation);
                     final int intervalId = namesItr.next().getIntervalId();
                     if ( intervalReads[intervalId] == null ) {
                         intervalReads[intervalId] = new ArrayList<>(nReadsPerInterval);
                         nPopulatedIntervals += 1;
                     }
-                    intervalReads[intervalId].add(fastqBytes);
+                    intervalReads[intervalId].add(read);
                 }
             }
-            final List<Tuple2<Integer, List<byte[]>>> fastQRecords = new ArrayList<>(nPopulatedIntervals);
+            final List<Tuple2<Integer, List<GATKRead>>> fastQRecords = new ArrayList<>(nPopulatedIntervals);
             if ( nPopulatedIntervals > 0 ) {
                 for ( int idx = 0; idx != nIntervals; ++idx ) {
-                    final List<byte[]> readList = intervalReads[idx];
+                    final List<GATKRead> readList = intervalReads[idx];
                     if ( readList != null ) fastQRecords.add(new Tuple2<>(idx, readList));
                 }
             }
