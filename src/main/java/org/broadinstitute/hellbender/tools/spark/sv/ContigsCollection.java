@@ -110,11 +110,16 @@ final class ContigsCollection implements Serializable {
         if(null==fileContents){
             contents = null;
         }else{
-            contents = new ArrayList<>();
-            for(int i=0; i<fileContents.size(); i+=2){
-                contents.add(new Tuple2<>(new ContigID(fileContents.get(i)), new ContigSequence(fileContents.get(i+1))));
+            final int sz = fileContents.size()/2;
+            contents = new ArrayList<>(sz);
+            for(int i=0; i<sz; ++i){
+                contents.add(new Tuple2<>(new ContigID(fileContents.get(2*i)), new ContigSequence(fileContents.get(2*i+1))));
             }
         }
+    }
+
+    public ContigsCollection( final int sz ) {
+        contents = new ArrayList<>(sz);
     }
 
     /**

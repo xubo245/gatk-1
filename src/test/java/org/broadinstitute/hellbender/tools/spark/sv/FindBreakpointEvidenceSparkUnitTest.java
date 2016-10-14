@@ -40,7 +40,7 @@ public final class FindBreakpointEvidenceSparkUnitTest extends BaseTest {
     private final ReadMetadata readMetadataExpected = new ReadMetadata(header, reads);
     private final Broadcast<ReadMetadata> broadcastMetadata = ctx.broadcast(readMetadataExpected);
     private final FindBreakpointEvidenceSpark.Locations locations =
-        new FindBreakpointEvidenceSpark.Locations(null, null, null, null, null, null, null);
+        new FindBreakpointEvidenceSpark.Locations(null, null, null, null, null, null, null, null);
     private final Set<String> expectedQNames = loadExpectedQNames(qNamesFile);
     private final Set<String> expectedAssemblyQNames = loadExpectedQNames(asmQNamesFile);
     private final List<SVInterval> expectedIntervalList = Arrays.asList(testIntervals);
@@ -116,14 +116,14 @@ public final class FindBreakpointEvidenceSparkUnitTest extends BaseTest {
                 .map(qName -> new FindBreakpointEvidenceSpark.QNameAndInterval(qName, 0))
                 .forEach(qNameMultiMap::add);
         final String expectedFile = fastqFile;
-        FindBreakpointEvidenceSpark.generateFastqs(ctx, qNameMultiMap, reads, 2, true,
-                intervalAndReads -> compareFastqs(intervalAndReads, expectedFile));
+        FindBreakpointEvidenceSpark.generateFastqs(ctx, qNameMultiMap, reads, 2,
+                                            intervalAndReads -> compareFastqs(intervalAndReads, expectedFile));
     }
 
     private static Tuple2<Integer, String> compareFastqs(
-            final Tuple2<Integer, List<GATKRead>> intervalAndFastqBytes,
+            final Tuple2<Integer, List<GATKRead>> intervalAndReads,
             final String fastqFile ) {
-        final List<GATKRead> readsList = intervalAndFastqBytes._2;
+        final List<GATKRead> readsList = intervalAndReads._2;
         final List<byte[]> fastqList =
                 readsList
                         .stream()
@@ -137,7 +137,7 @@ public final class FindBreakpointEvidenceSparkUnitTest extends BaseTest {
             idx += fastq.length;
         }
 
-        String expectedFile = fastqFile+intervalAndFastqBytes._1();
+        String expectedFile = fastqFile+intervalAndReads._1();
         final ByteArrayInputStream actualStream = new ByteArrayInputStream(concatenatedFastqs);
         try( InputStream expectedStream = new BufferedInputStream(new FileInputStream(expectedFile)) ) {
             int val;
@@ -148,7 +148,7 @@ public final class FindBreakpointEvidenceSparkUnitTest extends BaseTest {
         catch ( final IOException ioe ) {
             throw new GATKException("can't read expected values", ioe);
         }
-        return new Tuple2<>(intervalAndFastqBytes._1(), "hello");
+        return new Tuple2<>(intervalAndReads._1(), "hello");
     }
 
     private Set<String> loadExpectedQNames( final String fileName ) {

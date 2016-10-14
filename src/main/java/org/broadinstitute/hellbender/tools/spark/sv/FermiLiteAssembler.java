@@ -65,9 +65,7 @@ public class FermiLiteAssembler implements Assembler {
     //    a variable number (given by # of connections, above) of fml_ovlp_t's (8 bytes each)
     //  a byte pool containing the seq and cov data
     private static Assembly interpretAssemblyData( final ByteBuffer assemblyData ) {
-        assemblyData.order(ByteOrder.nativeOrder());
-        assemblyData.position(0);
-        assemblyData.limit(assemblyData.capacity());
+        assemblyData.order(ByteOrder.nativeOrder()).position(0).limit(assemblyData.capacity());
 
         // make the contigs
         final int nContigs = assemblyData.getInt();

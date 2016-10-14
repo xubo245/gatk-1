@@ -128,6 +128,9 @@ public final class FindBreakpointEvidenceSpark extends GATKSparkTool {
     @Argument(doc = "file for mapped qname intervals output", fullName = "qnameIntervalsForAssembly", optional = true)
     private String qNamesAssemblyFile;
 
+    @Argument(doc = "bwa-mem index image file", fullName = "alignerIndexImage")
+    private String alignerIndexFile;
+
     /**
      * This is a file that calls out the coordinates of intervals in the reference assembly to exclude from
      * consideration when calling putative breakpoints.
@@ -161,7 +164,7 @@ public final class FindBreakpointEvidenceSpark extends GATKSparkTool {
 
         final Locations locations =
                 new Locations(metadataFile, evidenceDir, intervalFile, qNamesMappedFile,
-                                kmerFile, qNamesAssemblyFile, exclusionIntervalsFile);
+                                kmerFile, qNamesAssemblyFile, exclusionIntervalsFile, alignerIndexFile);
         final Params params =
                 new Params(kSize, minEntropy, minEvidenceMapQ, minEvidenceMatchLength, maxIntervalCoverage,
                             minEvidenceCount, minKmersPerInterval, cleanerMaxIntervals, cleanerMinKmerCount,
@@ -191,12 +194,10 @@ public final class FindBreakpointEvidenceSpark extends GATKSparkTool {
         }
 
         // write a FASTQ file for each interval
-        final String outDir = outputDir;
-        final int maxFastqSize = maxFASTQSize;
-        final boolean includeMapLoc = includeMappingLocation;
         intervalDispositions.putAll(
-                generateFastqs(ctx, qNamesMultiMap, allPrimaryLines, intervals.size(), includeMapLoc,
-                                intervalAndReadList -> writeFastq(intervalAndReadList, outDir, maxFastqSize, includeMapLoc)));
+                generateFastqs(ctx, qNamesMultiMap, allPrimaryLines, intervals.size(),
+                               new FastqWriter(locations.alignerIndexFile, outputDir, maxFASTQSize, includeMappingLocation)));
+        killBwaIndex(ctx);
 
         // record the intervals
         if ( locations.intervalFile != null ) {
@@ -204,6 +205,16 @@ public final class FindBreakpointEvidenceSpark extends GATKSparkTool {
         }
 
         log("Wrote FASTQs for assembly.");
+    }
+
+    private static void killBwaIndex( JavaSparkContext ctx ) {
+        final int nCores = ctx.defaultParallelism();
+        List<Integer> someInts = new ArrayList<>(nCores);
+        for ( int idx = 0; idx != nCores; ++idx ) {
+            someInts.add(idx);
+        }
+        JavaRDD<Integer> sillyRDD = ctx.parallelize(someInts,nCores);
+        sillyRDD.foreach(idx -> FastqWriter.closeAligner());
     }
 
     /** write a file describing each interval */
@@ -379,7 +390,6 @@ public final class FindBreakpointEvidenceSpark extends GATKSparkTool {
                                        final HopscotchUniqueMultiMap<String, Integer, QNameAndInterval> qNamesMultiMap,
                                        final JavaRDD<GATKRead> reads,
                                        final int nIntervals,
-                                       final boolean includeMappingLocation,
                                        final org.apache.spark.api.java.function.Function<Tuple2<Integer, List<GATKRead>>, Tuple2<Integer, String>> fastqHandler) {
         final Broadcast<HopscotchUniqueMultiMap<String, Integer, QNameAndInterval>> broadcastQNamesMultiMap =
                 ctx.broadcast(qNamesMultiMap);
@@ -411,33 +421,94 @@ public final class FindBreakpointEvidenceSpark extends GATKSparkTool {
         return result;
     }
 
-    /** write a FASTQ file for an assembly */
-    @VisibleForTesting static Tuple2<Integer, String> writeFastq(
-            final Tuple2<Integer, List<GATKRead>> intervalAndFastqs,
-            final String outputDir,
-            final int maxFastqSize,
-            final boolean includeMappingLocation ) {
-        final List<GATKRead> readsList = intervalAndFastqs._2();
+    private static final class FastqWriter
+            implements org.apache.spark.api.java.function.Function<Tuple2<Integer, List<GATKRead>>, Tuple2<Integer, String>> {
 
-        final List<byte[]> fastqsList =
-                readsList
-                        .stream()
-                        .map(read -> SVFastqUtils.readToFastqRecord(read, includeMappingLocation))
-                .collect(SVUtils.arrayListCollector(readsList.size()));
-        SVFastqUtils.sortFastqRecords(fastqsList);
+        private static final long serialVersionUID = 1L;
+        private static volatile BwaMemAligner aligner;
+        private final String alignerIndexFile;
+        private final String outputDir;
+        private final int maxFastqSize;
+        private final boolean includeMappingLocation;
 
-        final int fastqSize = fastqsList.stream().mapToInt(fastqRec -> fastqRec.length).sum();
-        final String disposition;
-        if ( fastqSize > maxFastqSize ) disposition = "FASTQ not written -- too big (" + fastqSize + " bytes).";
-        else {
-            final String baseName = outputDir + "/assembly" + intervalAndFastqs._1();
-            final String fastqName = baseName + ".fastq";
-            SVFastqUtils.writeFastqFile(fastqName, null, fastqsList);
-            disposition = fastqName;
-
-            new FermiLiteAssembler().createAssembly(readsList).writeGFA(baseName + ".graph", null);
+        FastqWriter(final String alignerIndexFile, final String outputDir,
+                    final int maxFastqSize, final boolean includeMappingLocation) {
+            this.alignerIndexFile = alignerIndexFile;
+            this.outputDir = outputDir;
+            this.maxFastqSize = maxFastqSize;
+            this.includeMappingLocation = includeMappingLocation;
         }
-        return new Tuple2<>(intervalAndFastqs._1(), disposition);
+
+        @Override
+        public Tuple2<Integer, String> call( final Tuple2<Integer, List<GATKRead>> intervalAndReads ) {
+            final List<GATKRead> readsList = intervalAndReads._2();
+
+            final List<byte[]> fastqsList =
+                    readsList
+                            .stream()
+                            .map(read -> SVFastqUtils.readToFastqRecord(read, includeMappingLocation))
+                            .collect(SVUtils.arrayListCollector(readsList.size()));
+            SVFastqUtils.sortFastqRecords(fastqsList);
+
+            final int fastqSize = fastqsList.stream().mapToInt(fastqRec -> fastqRec.length).sum();
+            final String disposition;
+            if (fastqSize > maxFastqSize) disposition = "FASTQ not written -- too big (" + fastqSize + " bytes).";
+            else {
+                final String baseName = outputDir + "/assembly" + intervalAndReads._1();
+                final String fastqName = baseName + ".fastq";
+                SVFastqUtils.writeFastqFile(fastqName, null, fastqsList);
+                disposition = fastqName;
+
+                Assembly assembly = new FermiLiteAssembler().createAssembly(readsList);
+                assembly.writeGFA(baseName + ".graph", null);
+                alignAssembledContigs(baseName, intervalAndReads._1(), assembly);
+            }
+            return new Tuple2<>(intervalAndReads._1(), disposition);
+        }
+
+        public static void closeAligner() {
+            if ( aligner != null ) {
+                synchronized (FastqWriter.class) {
+                    BwaMemAligner aln = aligner;
+                    if ( aln != null ) {
+                        aligner = null;
+                        aln.close();
+                    }
+                }
+            }
+        }
+
+        private void alignAssembledContigs( final String baseName, final int assemblyId, final Assembly assembly ) {
+            final List<byte[]> tigSeqs =
+                    assembly.getContigs().stream()
+                            .map(Assembly.Contig::getSequence)
+                            .collect(SVUtils.arrayListCollector(assembly.getNContigs()));
+            final List<AlignmentRegion> alignments = getAligner().alignContigs(tigSeqs, assemblyId);
+            final String alignsName = baseName + ".alignments";
+            final PipelineOptions pipelineOptions = null;
+            try ( final BufferedWriter writer =
+                          new BufferedWriter(new OutputStreamWriter(BucketUtils.createFile(alignsName, pipelineOptions))) ) {
+                for ( final AlignmentRegion alignmentRegion : alignments ) {
+                    writer.write(alignmentRegion.toString());
+                    writer.newLine();
+                }
+            } catch ( final IOException ioe ) {
+                throw new GATKException("Can't write "+alignsName, ioe);
+            }
+        }
+
+        private BwaMemAligner getAligner() {
+            BwaMemAligner result = aligner;
+            if ( result == null ) {
+                synchronized (FastqWriter.class) {
+                    result = aligner;
+                    if ( result == null ) {
+                        aligner = result = new BwaMemAligner(alignerIndexFile);
+                    }
+                }
+            }
+            return result;
+        }
     }
 
     /**
@@ -739,10 +810,11 @@ public final class FindBreakpointEvidenceSpark extends GATKSparkTool {
         public final String kmerFile;
         public final String qNamesAssemblyFile;
         public final String exclusionIntervalsFile;
+        public final String alignerIndexFile;
 
         public Locations( final String metadataFile, final String evidenceDir, final String intervalFile,
                           final String qNamesMappedFile, final String kmerFile, final String qNamesAssemblyFile,
-                          final String exclusionIntervalsFile) {
+                          final String exclusionIntervalsFile, final String alignerIndexFile ) {
             this.metadataFile = metadataFile;
             this.evidenceDir = evidenceDir;
             this.intervalFile = intervalFile;
@@ -750,6 +822,7 @@ public final class FindBreakpointEvidenceSpark extends GATKSparkTool {
             this.kmerFile = kmerFile;
             this.qNamesAssemblyFile = qNamesAssemblyFile;
             this.exclusionIntervalsFile = exclusionIntervalsFile;
+            this.alignerIndexFile = alignerIndexFile;
         }
     }
 
