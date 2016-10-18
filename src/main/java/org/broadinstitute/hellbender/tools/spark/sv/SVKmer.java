@@ -134,6 +134,9 @@ public class SVKmer implements Comparable<SVKmer> {
     public final Base firstBase( final int kSize ) { return Base.values()[(int)(valHigh >> (kSize-2))]; }
     public final Base lastBase() { return Base.values()[(int)(valLow & 3)]; }
 
+    public final int firstCodon( final int kSize ) { return (int)(valHigh >>> (kSize-6)); }
+    public final int lastCodon( final int kSize ) { return (int)valLow & 0x3F; }
+
     @Override
     public boolean equals( final Object obj ) {
         return obj instanceof SVKmer && equals((SVKmer)obj);

@@ -41,7 +41,7 @@ public class FindBadGenomicKmersSparkUnitTest extends BaseTest {
         sequenceChunks.add(polyT);
 
         final JavaRDD<byte[]> refRDD = SparkContextFactory.getTestSparkContext().parallelize(sequenceChunks);
-        final List<SVKmer> badKmers = FindBadGenomicKmersSpark.processRefRDD(SVConstants.KMER_SIZE, 0., refRDD);
+        final List<SVKmer> badKmers = FindBadGenomicKmersSpark.processRefRDD(SVConstants.KMER_SIZE, SVConstants.MAX_DUST_SCORE, refRDD);
 
         // should have just one bad kmer:  polyA
         Assert.assertEquals(badKmers.size(), 1);
@@ -75,25 +75,9 @@ public class FindBadGenomicKmersSparkUnitTest extends BaseTest {
         }
 
         final List<SVKmer> badKmers =
-                FindBadGenomicKmersSpark.findBadGenomicKmers(ctx, SVConstants.KMER_SIZE, 0., ref, null, null);
+                FindBadGenomicKmersSpark.findBadGenomicKmers(ctx, SVConstants.KMER_SIZE, SVConstants.MAX_DUST_SCORE, ref, null, null);
         final Set<SVKmer> badKmerSet = new HashSet<>(badKmers);
         Assert.assertEquals(badKmers.size(), badKmerSet.size());
         Assert.assertEquals(badKmerSet, kmerMap.keySet());
-    }
-
-    @Test(groups = "spark")
-    public void intervalTest() {
-        final ReferenceMultiSource ref =
-                new ReferenceMultiSource((PipelineOptions)null, REFERENCE_FILE_NAME,
-                        ReferenceWindowFunctions.IDENTITY_FUNCTION);
-        final List<String> intervals =
-                Collections.singletonList("1:13851-13901");
-        final List<SVKmer> kmers = FindBadGenomicKmersSpark.processIntervals(SVConstants.KMER_SIZE,
-                SVConstants.MIN_ENTROPY,
-                intervals,
-                ref,
-                null);
-        Assert.assertEquals(kmers.size(), 1);
-        Assert.assertEquals(kmers.get(0), SVKmerizer.toKmer("CCCTTTCTATAATAACTAAAGTTAGCTGCCCTGGACTATTCACCCCCTAGT"));
     }
 }

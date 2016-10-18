@@ -16,9 +16,13 @@ import org.broadinstitute.hellbender.engine.spark.GATKSparkTool;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.tools.spark.utils.HopscotchSet;
 import org.broadinstitute.hellbender.utils.*;
+import org.broadinstitute.hellbender.utils.gcs.BucketUtils;
 import scala.Tuple2;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -45,12 +49,12 @@ public final class FindBadGenomicKmersSpark extends GATKSparkTool {
     @Argument(doc = "kmer size.", fullName = "kSize", optional = true)
     private int kSize = SVConstants.KMER_SIZE;
 
-    @Argument(doc = "minimum kmer entropy", fullName = "kmerEntropy")
-    private double minEntropy = SVConstants.MIN_ENTROPY;
+    @Argument(doc = "maximum kmer DUST score", fullName = "kmerMaxDUSTScore")
+    private int maxDUSTScore = SVConstants.MAX_DUST_SCORE;
 
-    @Argument(doc = "high copy genomic intervals (mitochondrion, e.g.)",
-            fullName = "highCopyIntervals", optional = true)
-    private List<String> highCopyIntervals;
+    @Argument(doc = "additional high copy kmers (mitochondrion, e.g.) fasta file name",
+            fullName = "highCopyFasta", optional = true)
+    private String highCopyFastaFilename;
 
     @Override
     public boolean requiresReference() {
@@ -65,10 +69,9 @@ public final class FindBadGenomicKmersSpark extends GATKSparkTool {
         if ( hdr != null ) dict = hdr.getSequenceDictionary();
         final PipelineOptions options = getAuthenticatedGCSOptions();
         final ReferenceMultiSource referenceMultiSource = getReference();
-        Collection<SVKmer> killList = findBadGenomicKmers(ctx, kSize, minEntropy, referenceMultiSource, options, dict);
-        if ( highCopyIntervals != null && !highCopyIntervals.isEmpty() ) {
-            killList = uniquify(killList,
-                                processIntervals(kSize, minEntropy, highCopyIntervals, referenceMultiSource, options));
+        Collection<SVKmer> killList = findBadGenomicKmers(ctx, kSize, maxDUSTScore, referenceMultiSource, options, dict);
+        if ( highCopyFastaFilename != null ) {
+            killList = uniquify(killList, processFasta(kSize, maxDUSTScore, highCopyFastaFilename, options));
         }
         SVUtils.writeKmersFile(kSize, outputFile, options, killList);
     }
@@ -76,7 +79,7 @@ public final class FindBadGenomicKmersSpark extends GATKSparkTool {
     /** Find high copy number kmers in the reference sequence */
     public static List<SVKmer> findBadGenomicKmers( final JavaSparkContext ctx,
                                                     final int kSize,
-                                                    final double minEntropy,
+                                                    final int maxDUSTScore,
                                                     final ReferenceMultiSource ref,
                                                     final PipelineOptions options,
                                                     final SAMSequenceDictionary readsDict ) {
@@ -84,7 +87,7 @@ public final class FindBadGenomicKmersSpark extends GATKSparkTool {
         final JavaRDD<byte[]> refRDD = getRefRDD(ctx, kSize, ref, options, readsDict);
 
         // Find the high copy number kmers
-        return processRefRDD(kSize, minEntropy, refRDD);
+        return processRefRDD(kSize, maxDUSTScore, refRDD);
     }
 
     /**
@@ -93,11 +96,11 @@ public final class FindBadGenomicKmersSpark extends GATKSparkTool {
      * N <= MAX_KMER_FREQ, and collect the high frequency kmers back in the driver.
      */
     @VisibleForTesting static List<SVKmer> processRefRDD( final int kSize,
-                                                          final double minEntropy,
+                                                          final int maxDUSTScore,
                                                           final JavaRDD<byte[]> refRDD ) {
         return refRDD
                 .flatMapToPair(seq ->
-                        SVKmerizerWithLowComplexityFilter.stream(seq, kSize, minEntropy)
+                        SVKmerizerWithLowComplexityFilter.stream(seq, kSize, maxDUSTScore)
                                 .map(kmer -> new Tuple2<>(kmer.canonical(kSize), 1))
                                 .collect(Collectors.toCollection(() -> new ArrayList<>(seq.length))))
                 .reduceByKey(Integer::sum)
@@ -143,33 +146,29 @@ public final class FindBadGenomicKmersSpark extends GATKSparkTool {
         return ctx.parallelize(sequenceChunks, sequenceChunks.size()/REF_RECORDS_PER_PARTITION+1);
     }
 
-    @VisibleForTesting static List<SVKmer> processIntervals( final int kSize,
-                                                             final double minEntropy,
-                                                             final List<String> highCopyIntervals,
-                                                             final ReferenceMultiSource ref,
-                                                             final PipelineOptions options ) {
-        final List<SimpleInterval> intervals =
-                IntervalUtils.convertGenomeLocsToSimpleIntervals(
-                    IntervalUtils.loadIntervals(highCopyIntervals, IntervalSetRule.UNION, IntervalMergingRule.ALL, 0,
-                        new GenomeLocParser(ref.getReferenceSequenceDictionary(null))).toList());
-        final int nKmers =
-                intervals
-                        .stream()
-                        .mapToInt(interval -> interval.size()-kSize+1)
-                        .sum();
-        final List<SVKmer> kmers = new ArrayList<>(nKmers);
-        for ( final SimpleInterval interval : intervals ) {
-            try {
-                final byte[] bases = ref.getReferenceBases(options, interval).getBases();
-                SVKmerizerWithLowComplexityFilter.stream(bases, kSize, minEntropy)
-                        .map(kmer -> kmer.canonical(kSize))
-                        .forEach(kmers::add);
+    @VisibleForTesting static List<SVKmer> processFasta( final int kSize,
+                                                         final int maxDUSTScore,
+                                                         final String fastaFilename,
+                                                         final PipelineOptions options ) {
+        try ( BufferedReader rdr = new BufferedReader(new InputStreamReader(BucketUtils.openFile(fastaFilename, options))) ) {
+            List<SVKmer> kmers = new ArrayList<>((int)BucketUtils.fileSize(fastaFilename, options));
+            String line;
+            StringBuilder sb = new StringBuilder();
+            while ( (line = rdr.readLine()) != null ) {
+                if ( line.charAt(0) != '>' ) sb.append(line);
+                else if ( sb.length() > 0 ) {
+                    SVKmerizerWithLowComplexityFilter.stream(sb,kSize,maxDUSTScore).forEach(kmers::add);
+                    sb.setLength(0);
+                }
             }
-            catch ( final IOException ioe ) {
-                throw new GATKException("Can't get reference sequence bases for " + interval, ioe);
+            if ( sb.length() > 0 ) {
+                SVKmerizerWithLowComplexityFilter.stream(sb, kSize, maxDUSTScore).forEach(kmers::add);
             }
+            return kmers;
         }
-        return kmers;
+        catch ( IOException ioe ) {
+            throw new GATKException("Can't read high copy kmers fasta file "+fastaFilename, ioe);
+        }
     }
 
     private static Collection<SVKmer> uniquify(final Collection<SVKmer> coll1, final Collection<SVKmer> coll2 ) {
