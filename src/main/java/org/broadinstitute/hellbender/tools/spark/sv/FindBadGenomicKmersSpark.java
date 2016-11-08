@@ -1,5 +1,9 @@
 package org.broadinstitute.hellbender.tools.spark.sv;
 
+import com.esotericsoftware.kryo.DefaultSerializer;
+import com.esotericsoftware.kryo.Kryo;
+import com.esotericsoftware.kryo.io.Input;
+import com.esotericsoftware.kryo.io.Output;
 import com.google.cloud.dataflow.sdk.options.PipelineOptions;
 import com.google.common.annotations.VisibleForTesting;
 import htsjdk.samtools.SAMFileHeader;
@@ -14,20 +18,16 @@ import org.broadinstitute.hellbender.cmdline.programgroups.StructuralVariationSp
 import org.broadinstitute.hellbender.engine.datasources.ReferenceMultiSource;
 import org.broadinstitute.hellbender.engine.spark.GATKSparkTool;
 import org.broadinstitute.hellbender.exceptions.GATKException;
+import org.broadinstitute.hellbender.tools.spark.utils.HopscotchMap;
 import org.broadinstitute.hellbender.tools.spark.utils.HopscotchSet;
 import org.broadinstitute.hellbender.utils.*;
 import org.broadinstitute.hellbender.utils.gcs.BucketUtils;
 import scala.Tuple2;
 
-import java.io.BufferedInputStream;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.List;
-import java.util.stream.Collectors;
+import java.util.*;
 
 /**
  * SparkTool to identify 63-mers in the reference that occur more than 3 times.
@@ -91,6 +91,62 @@ public final class FindBadGenomicKmersSpark extends GATKSparkTool {
     }
 
     /**
+     * A <Kmer,count> pair.
+     */
+    @DefaultSerializer(KmerAndCount.Serializer.class)
+    @VisibleForTesting
+    final static class KmerAndCount extends SVKmer implements Map.Entry<SVKmer, Integer> {
+        private int count;
+
+        KmerAndCount( final SVKmer kmer ) {
+            super(kmer);
+            count = 1;
+        }
+
+        KmerAndCount( final SVKmer kmer, final int count ) {
+            super(kmer);
+            this.count = count;
+        }
+
+        private KmerAndCount(final Kryo kryo, final Input input ) {
+            super(kryo, input);
+            count = input.readInt();
+        }
+
+        protected void serialize( final Kryo kryo, final Output output ) {
+            super.serialize(kryo, output);
+            output.writeInt(count);
+        }
+
+        @Override
+        public SVKmer getKey() { return new SVKmer(this); }
+        @Override
+        public Integer getValue() { return count; }
+        @Override
+        public Integer setValue( final Integer count ) {
+            Integer result = this.count;
+            this.count = count;
+            return result;
+        }
+        public int grabCount() { return count; }
+        public void bumpCount() { count += 1; }
+        public void bumpCount( final int extra ) { count += extra; }
+
+        public static final class Serializer extends com.esotericsoftware.kryo.Serializer<KmerAndCount> {
+            @Override
+            public void write( final Kryo kryo, final Output output, final KmerAndCount kmerAndInterval) {
+                kmerAndInterval.serialize(kryo, output);
+            }
+
+            @Override
+            public KmerAndCount read(final Kryo kryo, final Input input,
+                                                             final Class<KmerAndCount> klass ) {
+                return new KmerAndCount(kryo, input);
+            }
+        }
+    }
+
+    /**
      * Turn a text file of overlapping records from a reference sequence into an RDD, and do a classic map/reduce:
      * Kmerize, mapping to a pair <kmer,1>, reduce by summing values by key, filter out <kmer,N> where
      * N <= MAX_KMER_FREQ, and collect the high frequency kmers back in the driver.
@@ -98,14 +154,41 @@ public final class FindBadGenomicKmersSpark extends GATKSparkTool {
     @VisibleForTesting static List<SVKmer> processRefRDD( final int kSize,
                                                           final int maxDUSTScore,
                                                           final JavaRDD<byte[]> refRDD ) {
+        final int nPartitions = refRDD.getNumPartitions();
+        final int hashSize = 2*REF_RECORDS_PER_PARTITION;
         return refRDD
-                .flatMapToPair(seq ->
-                        SVKmerizerWithLowComplexityFilter.stream(seq, kSize, maxDUSTScore)
-                                .map(kmer -> new Tuple2<>(kmer.canonical(kSize), 1))
-                                .collect(Collectors.toCollection(() -> new ArrayList<>(seq.length))))
-                .reduceByKey(Integer::sum)
-                .filter(kv -> kv._2 > MAX_KMER_FREQ)
-                .map(kv -> kv._1)
+                .mapPartitions(seqItr -> {
+                    final HopscotchMap<SVKmer, Integer, KmerAndCount> kmerCounts =
+                            new HopscotchMap<>(hashSize);
+                    while ( seqItr.hasNext() ) {
+                        final byte[] seq = seqItr.next();
+                        SVKmerizerWithLowComplexityFilter.stream(seq, kSize, maxDUSTScore).forEach(kmer -> {
+                            KmerAndCount entry = kmerCounts.find(kmer);
+                            if ( entry == null ) kmerCounts.add(new KmerAndCount(kmer));
+                            else entry.bumpCount();
+                        });
+                    }
+                    return kmerCounts;
+                })
+                .mapToPair(entry -> new Tuple2<>(entry.getKey(), entry.getValue()))
+                .repartition(nPartitions)
+                .mapPartitions(pairItr -> {
+                    final HopscotchMap<SVKmer, Integer, KmerAndCount> kmerCounts =
+                            new HopscotchMap<>(hashSize);
+                    while ( pairItr.hasNext() ) {
+                        final Tuple2<SVKmer, Integer> pair = pairItr.next();
+                        final SVKmer kmer = pair._1();
+                        final int count = pair._2();
+                        KmerAndCount entry = kmerCounts.find(kmer);
+                        if ( entry == null ) kmerCounts.add(new KmerAndCount(kmer, count));
+                        else entry.bumpCount(count);
+                    }
+                    final List<SVKmer> kmers = new ArrayList<>(REF_RECORDS_PER_PARTITION/100);
+                    for ( KmerAndCount kmerAndCount : kmerCounts ) {
+                        if ( kmerAndCount.grabCount() > MAX_KMER_FREQ ) kmers.add(kmerAndCount.getKey());
+                    }
+                    return kmers;
+                })
                 .collect();
     }
 
