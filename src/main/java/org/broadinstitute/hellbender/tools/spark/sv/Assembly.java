@@ -62,7 +62,7 @@ public final class Assembly {
         public boolean isTargetRC() { return isTargetRC; }
     }
 
-    public void writeGFA(final String fileName, final PipelineOptions pipelineOptions ) {
+    public void writeGFA( final String fileName, final PipelineOptions pipelineOptions ) {
         final HashMap<Contig, Integer> idMap = new HashMap<>(SVUtils.hashMapCapacity(contigs.size()));
         int id = 0;
         for (final Contig contig : contigs) {

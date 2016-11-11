@@ -9,6 +9,7 @@ import com.google.common.annotations.VisibleForTesting;
 import htsjdk.samtools.SAMFileHeader;
 import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.samtools.SAMSequenceRecord;
+import org.apache.spark.HashPartitioner;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.broadinstitute.hellbender.cmdline.Argument;
@@ -128,6 +129,7 @@ public final class FindBadGenomicKmersSpark extends GATKSparkTool {
             this.count = count;
             return result;
         }
+
         public int grabCount() { return count; }
         public void bumpCount() { count += 1; }
         public void bumpCount( final int extra ) { count += extra; }
@@ -162,16 +164,18 @@ public final class FindBadGenomicKmersSpark extends GATKSparkTool {
                             new HopscotchMap<>(hashSize);
                     while ( seqItr.hasNext() ) {
                         final byte[] seq = seqItr.next();
-                        SVKmerizerWithLowComplexityFilter.stream(seq, kSize, maxDUSTScore).forEach(kmer -> {
-                            KmerAndCount entry = kmerCounts.find(kmer);
-                            if ( entry == null ) kmerCounts.add(new KmerAndCount(kmer));
-                            else entry.bumpCount();
-                        });
+                        SVKmerizerWithLowComplexityFilter.stream(seq, kSize, maxDUSTScore)
+                            .map(kmer -> kmer.canonical(kSize))
+                            .forEach(kmer -> {
+                                KmerAndCount entry = kmerCounts.find(kmer);
+                                if ( entry == null ) kmerCounts.add(new KmerAndCount(kmer));
+                                else entry.bumpCount();
+                            });
                     }
                     return kmerCounts;
                 })
                 .mapToPair(entry -> new Tuple2<>(entry.getKey(), entry.getValue()))
-                .repartition(nPartitions)
+                .partitionBy(new HashPartitioner(nPartitions))
                 .mapPartitions(pairItr -> {
                     final HopscotchMap<SVKmer, Integer, KmerAndCount> kmerCounts =
                             new HopscotchMap<>(hashSize);

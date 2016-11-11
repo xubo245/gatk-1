@@ -12,7 +12,7 @@ import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.List;
 
-public class BwaMemAligner implements AutoCloseable {
+public class BwaMemAligner implements Aligner, AutoCloseable {
     private long indexAddress;
     private final List<String> refContigNames;
 
@@ -51,14 +51,14 @@ public class BwaMemAligner implements AutoCloseable {
     }
 
     @Override
-    public void close() {
+    public synchronized void close() {
         if ( indexAddress != 0 ) destroyIndex(indexAddress);
         indexAddress = 0;
     }
 
-    @VisibleForTesting List<String> getContigNames() { return refContigNames; }
+    public List<String> getContigNames() { return refContigNames; }
 
-    public List<AlignmentRegion> alignContigs( List<byte[]> contigSequences, int assemblyId ) {
+    public List<List<Alignment>> alignContigs( List<byte[]> contigSequences ) {
         if ( indexAddress == 0L ) {
             throw new GATKException("No bwa-mem index is open.");
         }
@@ -75,30 +75,35 @@ public class BwaMemAligner implements AutoCloseable {
             throw new GATKException("Unable to get alignments from bwa-mem. We don't know why.");
         }
         alignsBuf.order(ByteOrder.nativeOrder()).position(0).limit(alignsBuf.capacity());
-        final List<AlignmentRegion> alignRegions = new ArrayList<>(nContigs);
-        final String assemblyName = "assembly"+assemblyId;
+        final List<List<Alignment>> allAlignments = new ArrayList<>(nContigs);
         for ( int contigId = 0; contigId != nContigs; ++contigId ) {
-            String contigName = "tig"+(contigId+1);
             int nAligns = alignsBuf.getInt();
+            final List<Alignment> alignments = new ArrayList<>(nAligns);
             while ( nAligns-- > 0 ) {
                 final int refId = alignsBuf.getInt();
-                final int refStartPos = alignsBuf.getInt() + 1;
-                final int refEndPos = alignsBuf.getInt() + 1;
-                final int tigStartPos = alignsBuf.getInt() + 1;
-                final int tigEndPos = alignsBuf.getInt() + 1;
-                final int mapQual = alignsBuf.getInt();
-                final boolean isForwardStrand = refStartPos <= refEndPos;
-                final String refContigName = refContigNames.get(refId);
-                final SimpleInterval interval;
-                if ( isForwardStrand ) interval = new SimpleInterval(refContigName, refStartPos, refEndPos);
-                else interval = new SimpleInterval(refContigName, refEndPos, refStartPos);
-                alignRegions.add(
-                        new AlignmentRegion(assemblyName, contigName, new Cigar(), isForwardStrand, interval,
-                                            mapQual, tigStartPos, tigEndPos, 0));
+                int refStartPos = alignsBuf.getInt();
+                int refEndPos = alignsBuf.getInt();
+                final boolean isRC = refStartPos > refEndPos;
+                if ( isRC ) {
+                    final int tmp = refEndPos;
+                    refEndPos = refStartPos;
+                    refStartPos = tmp;
+                }
+                final int tigStartPos = alignsBuf.getInt();
+                final int tigEndPos = alignsBuf.getInt();
+                boolean isAlternateMapping = false;
+                int mapQual = alignsBuf.getInt();
+                if ( mapQual < 0 ) {
+                    mapQual = 0;
+                    isAlternateMapping = true;
+                }
+                alignments.add(new Alignment(refId, refStartPos, refEndPos+1, isRC,
+                                             tigStartPos, tigEndPos, isAlternateMapping, mapQual));
             }
+            allAlignments.add(alignments);
         }
         destroyAlignments(alignsBuf);
-        return alignRegions;
+        return allAlignments;
     }
 
     private static native long createIndex( String indexImageFile );

@@ -19,6 +19,7 @@ import org.broadinstitute.hellbender.cmdline.programgroups.StructuralVariationSp
 import org.broadinstitute.hellbender.engine.spark.GATKSparkTool;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.tools.spark.utils.*;
+import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.gcs.BucketUtils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import scala.Tuple2;
@@ -458,9 +459,12 @@ public final class FindBreakpointEvidenceSpark extends GATKSparkTool {
                 SVFastqUtils.writeFastqFile(fastqName, null, fastqsList);
                 disposition = fastqName;
 
-                Assembly assembly = new FermiLiteAssembler().createAssembly(readsList);
+                final Assembly assembly = new FermiLiteAssembler().createAssembly(readsList);
                 assembly.writeGFA(baseName + ".graph", null);
-                alignAssembledContigs(baseName, intervalAndReads._1(), assembly);
+                final Aligner aligner = getAligner();
+                final List<List<Alignment>> alignments = alignContigs(assembly, aligner);
+                writeAlignmentRegions(baseName + ".alignments", null, intervalAndReads._1(), aligner.getContigNames(),
+                                        alignments);
             }
             return new Tuple2<>(intervalAndReads._1(), disposition);
         }
@@ -477,32 +481,77 @@ public final class FindBreakpointEvidenceSpark extends GATKSparkTool {
             }
         }
 
-        private void alignAssembledContigs( final String baseName, final int assemblyId, final Assembly assembly ) {
+        private List<List<Alignment>> alignContigs( final Assembly assembly, final Aligner aligner ) {
             final List<byte[]> tigSeqs =
                     assembly.getContigs().stream()
                             .map(Assembly.Contig::getSequence)
                             .collect(SVUtils.arrayListCollector(assembly.getNContigs()));
-            final List<AlignmentRegion> alignments = getAligner().alignContigs(tigSeqs, assemblyId);
-            final String alignsName = baseName + ".alignments";
-            final PipelineOptions pipelineOptions = null;
+            return aligner.alignContigs(tigSeqs);
+        }
+
+        private void writeAlignmentRegions( final String alignsName,
+                                            final PipelineOptions pipelineOptions,
+                                            final int assemblyId,
+                                            final List<String> contigNames,
+                                            final List<List<Alignment>> alignments ) {
             try ( final BufferedWriter writer =
                           new BufferedWriter(new OutputStreamWriter(BucketUtils.createFile(alignsName, pipelineOptions))) ) {
-                for ( final AlignmentRegion alignmentRegion : alignments ) {
-                    writer.write(alignmentRegion.toString());
-                    writer.newLine();
+                final int nContigs = alignments.size();
+                for ( int tigId = 0; tigId < nContigs; ++tigId ) {
+                    for ( final Alignment alignment : alignments.get(tigId) ) {
+                        if ( alignment.isAlternateMapping() ) continue;
+                        final AlignmentRegion alignmentRegion =
+                                new AlignmentRegion("assembly"+assemblyId,
+                                                    "tig"+(tigId+1),
+                                                    new Cigar(),
+                                                    !alignment.isRC(),
+                                                    new SimpleInterval(contigNames.get(alignment.getRefId()),
+                                                                        alignment.getRefStart()+1,
+                                                                        alignment.getRefEnd()+1),
+                                                    alignment.getMapQual(),
+                                                    alignment.getTigStart()+1,
+                                                    alignment.getTigEnd()+1,
+                                                    0);
+                        writer.write(alignmentRegion.toString());
+                        writer.newLine();
+                    }
                 }
             } catch ( final IOException ioe ) {
                 throw new GATKException("Can't write "+alignsName, ioe);
             }
+            /*
+        final List<AlignmentRegion> alignRegions = new ArrayList<>(nContigs);
+        final String assemblyName = "assembly"+assemblyId;
+        for ( int contigId = 0; contigId != nContigs; ++contigId ) {
+            String contigName = "tig"+(contigId+1);
+            int nAligns = alignsBuf.getInt();
+            while ( nAligns-- > 0 ) {
+                final int refId = alignsBuf.getInt();
+                final int refStartPos = alignsBuf.getInt() + 1;
+                final int refEndPos = alignsBuf.getInt() + 1;
+                final int tigStartPos = alignsBuf.getInt() + 1;
+                final int tigEndPos = alignsBuf.getInt() + 1;
+                final int mapQual = alignsBuf.getInt();
+                final boolean isForwardStrand = refStartPos <= refEndPos;
+                final String refContigName = refContigNames.get(refId);
+                final SimpleInterval interval;
+                if ( isForwardStrand ) interval = new SimpleInterval(refContigName, refStartPos, refEndPos);
+                else interval = new SimpleInterval(refContigName, refEndPos, refStartPos);
+                alignRegions.add(
+                        new AlignmentRegion(assemblyName, contigName, new Cigar(), isForwardStrand, interval,
+                                            mapQual, tigStartPos, tigEndPos, 0));
+            }
+        }
+             */
         }
 
-        private BwaMemAligner getAligner() {
-            BwaMemAligner result = aligner;
+        private Aligner getAligner() {
+            Aligner result = aligner;
             if ( result == null ) {
                 synchronized (FastqWriter.class) {
                     result = aligner;
                     if ( result == null ) {
-                        aligner = result = new BwaMemAligner(alignerIndexFile);
+                        result = aligner = new BwaMemAligner(alignerIndexFile);
                     }
                 }
             }
