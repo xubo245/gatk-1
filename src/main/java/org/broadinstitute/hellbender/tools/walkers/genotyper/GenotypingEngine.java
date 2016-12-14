@@ -354,7 +354,7 @@ public abstract class GenotypingEngine<Config extends StandardCallerArgumentColl
             if (alternativeAllele.isReference()) {
                 continue;
             }
-            final boolean isPlausible = afCalculationResult.isPolymorphicPhredScaledQual(alternativeAllele, configuration.genotypeArgs.STANDARD_CONFIDENCE_FOR_EMITTING);
+            final boolean isPlausible = afCalculationResult.isPolymorphicPhredScaledQual(alternativeAllele, configuration.genotypeArgs.STANDARD_CONFIDENCE_FOR_CALLING);
 
             siteIsMonomorphic &= ! isPlausible;
             if (isPlausible || forceKeepAllele(alternativeAllele)) {
@@ -528,8 +528,7 @@ public abstract class GenotypingEngine<Config extends StandardCallerArgumentColl
 
     protected final boolean passesEmitThreshold(final double conf, final boolean bestGuessIsRef) {
         return (configuration.outputMode == OutputMode.EMIT_ALL_CONFIDENT_SITES || !bestGuessIsRef) &&
-                conf >= Math.min(configuration.genotypeArgs.STANDARD_CONFIDENCE_FOR_CALLING,
-                        configuration.genotypeArgs.STANDARD_CONFIDENCE_FOR_EMITTING);
+                passesCallThreshold(configuration.genotypeArgs.STANDARD_CONFIDENCE_FOR_CALLING);
     }
 
     protected final boolean passesCallThreshold(final double conf) {
@@ -612,7 +611,7 @@ public abstract class GenotypingEngine<Config extends StandardCallerArgumentColl
 
         final double normalizedLog10ACeq0Posterior = log10ACeq0Posterior - log10PosteriorNormalizationConstant;
         // This is another condition to return a 0.0 also present in AFCalculator code as well.
-        if (normalizedLog10ACeq0Posterior >= QualityUtils.qualToErrorProbLog10(configuration.genotypeArgs.STANDARD_CONFIDENCE_FOR_EMITTING)) {
+        if (normalizedLog10ACeq0Posterior >= QualityUtils.qualToErrorProbLog10(configuration.genotypeArgs.STANDARD_CONFIDENCE_FOR_CALLING)) {
             return 0.0;
         }
 
