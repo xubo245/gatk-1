@@ -57,7 +57,7 @@ class SVVariantConsensusCall implements Serializable {
                 .alleles(produceAlleles(novelAdjacencyReferenceLocations, broadcastReference.getValue(), svtype))
                 .id(produceVariantId(novelAdjacencyReferenceLocations, svtype))
                 .attribute(VCFConstants.END_KEY, end)
-                .attribute(GATKSVVCFHeaderLines.SVLEN, getSvLength(novelAdjacencyReferenceLocations));
+                .attribute(GATKSVVCFHeaderLines.SVLEN, getSvLength(novelAdjacencyReferenceLocations, svtype));
 
         typeAnnotations.forEach(vcBuilder::attribute);
         parseComplicationsAndMakeThemAttributeMap(novelAdjacencyReferenceLocations).forEach(vcBuilder::attribute);
@@ -109,13 +109,13 @@ class SVVariantConsensusCall implements Serializable {
         final String startString;
         switch (svtype){
             case INV:
-                startString = (endConnectionType == FIVE_TO_FIVE ? GATKSVVCFHeaderLines.INV_5_TO_3 : GATKSVVCFHeaderLines.INV_3_TO_5);
+                startString = (endConnectionType == FIVE_TO_FIVE ? GATKSVVCFHeaderLines.INV55 : GATKSVVCFHeaderLines.INV33);
                 break;
             case INS: case DEL:
                 if (novelAdjacencyReferenceLocations.complication.dupSeqForwardStrandRep.isEmpty()) {
                     startString = svtype.name();
                 } else {
-                    startString = svtype.name() + "_DUP_" +
+                    startString = svtype.name() + "-DUP-" +
                             ((novelAdjacencyReferenceLocations.complication.dupSeqRepeatNumOnRef < novelAdjacencyReferenceLocations.complication.dupSeqRepeatNumOnCtg) ? SVConstants.CallingStepConstants.TANDUP_EXPANSION_STRING : SVConstants.CallingStepConstants.TANDUP_CONTRACTION_STRING);
                 }
                 break;
@@ -133,15 +133,20 @@ class SVVariantConsensusCall implements Serializable {
 
     // TODO: 12/14/16 does not work for simple translocation
     @VisibleForTesting
-    static int getSvLength(final NovelAdjacencyReferenceLocations breakpoints) {
+    static int getSvLength(final NovelAdjacencyReferenceLocations breakpoints, GATKSVVCFHeaderLines.SVTYPES svtype) {
         final int start = breakpoints.leftJustifiedLeftRefLoc.getEnd();
         final int end = breakpoints.leftJustifiedRightRefLoc.getStart();
 
-        if (start != end) {
-            return end - start;
-        } else {
-            return breakpoints.complication.insertedSequenceForwardStrandRep.length()
-                    + (breakpoints.complication.dupSeqRepeatNumOnCtg - breakpoints.complication.dupSeqRepeatNumOnRef)*breakpoints.complication.dupSeqForwardStrandRep.length();
+        switch (svtype) {
+            case INV:
+                return end - start;
+            case DEL:
+                return start - end;
+            case INS:case DUP:
+                return breakpoints.complication.insertedSequenceForwardStrandRep.length()
+                        + (breakpoints.complication.dupSeqRepeatNumOnCtg - breakpoints.complication.dupSeqRepeatNumOnRef)*breakpoints.complication.dupSeqForwardStrandRep.length();
+            default:
+                    throw new GATKException("Unsupported SV type yet!");
         }
     }
 
@@ -199,7 +204,7 @@ class SVVariantConsensusCall implements Serializable {
         } else {
             type = GATKSVVCFHeaderLines.SVTYPES.INV;
             attributeMap.put(GATKSVVCFHeaderLines.SVTYPE, type.name());
-            attributeMap.put( (endConnectionType == FIVE_TO_FIVE) ? GATKSVVCFHeaderLines.INV_5_TO_3 : GATKSVVCFHeaderLines.INV_3_TO_5, "");
+            attributeMap.put( (endConnectionType == FIVE_TO_FIVE) ? GATKSVVCFHeaderLines.INV55 : GATKSVVCFHeaderLines.INV33, "");
         }
         return attributeMap;
     }

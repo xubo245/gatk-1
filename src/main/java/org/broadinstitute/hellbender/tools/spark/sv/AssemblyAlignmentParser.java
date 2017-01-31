@@ -27,7 +27,7 @@ import static org.broadinstitute.hellbender.tools.spark.sv.ContigsCollection.loa
 class AssemblyAlignmentParser implements Serializable {
     private static final long serialVersionUID = 1L;
     private static final Logger log = LogManager.getLogger(AssemblyAlignmentParser.class);
-    private static final boolean DEBUG_STATS = false;
+    private static final boolean DEBUG_STATS = true;
 
     /**
      * Loads the alignment regions and sequence of all locally-assembled contigs from the text file they are in;
@@ -75,8 +75,7 @@ class AssemblyAlignmentParser implements Serializable {
                 });
     }
 
-    // TODO: 11/26/16 assuming 'I'/'D' cannot be the beginning or last CIGAR operator AND the following operator cannot be a clipping
-    // TODO: 1/18/17 'I' as first/last operator has been seen in actual data, for the purpose of this function, changing it to soft clipping is fine, but needs to be done later (should be very soon)
+    // TODO: 1/31/17 assuming 'I'/'D' cannot be the operator adjacent to clipping operators 'S'/'H', and 'D' cannot be the beginning or last operator
     // TODO: 1/18/17 handle mapping quality and mismatches of the new alignment better rather than artificial ones. this would ultimately require a re-alignment done right.
     /**
      * Break a gapped alignment into multiple alignment regions, based on input sensitivity: i.e. if the gap(s) in the input alignment
@@ -114,20 +113,25 @@ class AssemblyAlignmentParser implements Serializable {
     @VisibleForTesting
     static Iterable<AlignmentRegion> breakGappedAlignment(final AlignmentRegion oneRegion, final int sensitivity) {
 
-        final List<CigarElement> cigarElements = oneRegion.forwardStrandCigar.getCigarElements();
+        final List<CigarElement> cigarElements = new ArrayList<>();
+        final boolean cigarHasInsertionAsTrailingOperator = parseCigarAndConvertTrailingInsertionToSoftClip(oneRegion.cigarAlong5to3DirectionOfContig, cigarElements);
         if (cigarElements.size() == 1) return new ArrayList<>( Collections.singletonList(oneRegion) );
 
         final List<AlignmentRegion> result = new ArrayList<>(10); // blunt guess
         final int originalMapQ = oneRegion.mapQual;
 
         final List<CigarElement> cigarMemoryList = new ArrayList<>();
-        final int clippedNBases = SVVariantCallerUtils.getNumClippedBases(true, oneRegion.forwardStrandCigar);
+        int clippedNBasesFromStart = SVVariantCallerUtils.getNumClippedBases(true, oneRegion.cigarAlong5to3DirectionOfContig);
+        if (cigarHasInsertionAsTrailingOperator && cigarElements.get(0).getOperator()==CigarOperator.S) {
+            clippedNBasesFromStart = cigarElements.get(0).getLength();
+        }
         final int hardClippingAtBeginning = cigarElements.get(0).getOperator()==CigarOperator.H ? cigarElements.get(0).getLength() : 0;
         final int hardClippingAtEnd = (cigarElements.get(cigarElements.size()-1).getOperator()== CigarOperator.H)? cigarElements.get(cigarElements.size()-1).getLength() : 0;
         final CigarElement hardClippingAtBeginningMaybeNull = hardClippingAtBeginning==0 ? null : new CigarElement(hardClippingAtBeginning, CigarOperator.H);
-        int     refIntervalStart    = oneRegion.referenceInterval.getStart(),
-                contigIntervalStart = 1 + clippedNBases;
+        int contigIntervalStart = 1 + clippedNBasesFromStart;
         int gapCount = 0;
+        // we are walking along the contig following the cigar, which indicates that we might be walking backwards on the reference if oneRegion.forwardStrand==false
+        int refBoundary1stInTheDirectionOfContig = oneRegion.forwardStrand ? oneRegion.referenceInterval.getStart() : oneRegion.referenceInterval.getEnd();
         for (final CigarElement cigarElement : cigarElements) {
             final CigarOperator op = cigarElement.getOperator();
             final int operatorLen = cigarElement.getLength();
@@ -145,8 +149,14 @@ class AssemblyAlignmentParser implements Serializable {
                     final Cigar memoryCigar = new Cigar(cigarMemoryList);
                     final int effectiveReadLen = memoryCigar.getReadLength() + SVVariantCallerUtils.getTotalHardClipping(memoryCigar) - SVVariantCallerUtils.getNumClippedBases(true, memoryCigar);
 
-                    // infer reference interval
-                    final SimpleInterval referenceInterval = new SimpleInterval(oneRegion.referenceInterval.getContig(), refIntervalStart, refIntervalStart + memoryCigar.getReferenceLength()-1);
+                    // infer reference interval taking into account of strand
+                    final int refBoundary2ndInTheDirectionOfContig = refBoundary1stInTheDirectionOfContig + (oneRegion.forwardStrand ? memoryCigar.getReferenceLength()-1 : -memoryCigar.getReferenceLength()+1) ;
+                    final SimpleInterval referenceInterval;
+                    if (oneRegion.forwardStrand) {
+                        referenceInterval = new SimpleInterval(oneRegion.referenceInterval.getContig(), refBoundary1stInTheDirectionOfContig, refBoundary2ndInTheDirectionOfContig);
+                    } else {
+                        referenceInterval = new SimpleInterval(oneRegion.referenceInterval.getContig(), refBoundary2ndInTheDirectionOfContig, refBoundary1stInTheDirectionOfContig);
+                    }
 
                     // infer contig interval
                     final int contigIntervalEnd = contigIntervalStart + effectiveReadLen - 1;
@@ -168,8 +178,11 @@ class AssemblyAlignmentParser implements Serializable {
                     cigarMemoryList.add(new CigarElement(contigIntervalEnd - hardClippingAtBeginning + (op.consumesReadBases() ? operatorLen : 0), CigarOperator.S));
 
                     // update pointers into reference and contig
-                    refIntervalStart     += op.consumesReadBases() ? memoryCigar.getReferenceLength()  : memoryCigar.getReferenceLength() + operatorLen;
-                    contigIntervalStart  += op.consumesReadBases() ? effectiveReadLen + operatorLen    : effectiveReadLen;
+                    if (oneRegion.forwardStrand)
+                        refBoundary1stInTheDirectionOfContig += op.consumesReadBases() ? memoryCigar.getReferenceLength()  : memoryCigar.getReferenceLength() + operatorLen;
+                    else
+                        refBoundary1stInTheDirectionOfContig -= op.consumesReadBases() ? memoryCigar.getReferenceLength()  : memoryCigar.getReferenceLength() + operatorLen;
+                    contigIntervalStart += op.consumesReadBases() ? effectiveReadLen + operatorLen    : effectiveReadLen;
 
                     ++gapCount;
 
@@ -182,13 +195,51 @@ class AssemblyAlignmentParser implements Serializable {
         if (gapCount == 0)
             return new ArrayList<>( Collections.singletonList(oneRegion) );
 
-        final SimpleInterval lastReferenceInterval =  new SimpleInterval(oneRegion.referenceInterval.getContig(), refIntervalStart, oneRegion.referenceInterval.getEnd());
+        final SimpleInterval lastReferenceInterval;
+        if (oneRegion.forwardStrand) {
+            final int lastRefInterval2ndBoundary = oneRegion.referenceInterval.getEnd();
+            lastReferenceInterval =  new SimpleInterval(oneRegion.referenceInterval.getContig(), refBoundary1stInTheDirectionOfContig, lastRefInterval2ndBoundary);
+        } else {
+            final int lastRefInterval2ndBoundary = oneRegion.referenceInterval.getStart();
+            lastReferenceInterval =  new SimpleInterval(oneRegion.referenceInterval.getContig(), lastRefInterval2ndBoundary, refBoundary1stInTheDirectionOfContig);
+        }
+
         final Cigar lastForwardStrandCigar = new Cigar(cigarMemoryList);
+        int clippedNBasesFromEnd = SVVariantCallerUtils.getNumClippedBases(false, oneRegion.cigarAlong5to3DirectionOfContig);
+        if (cigarHasInsertionAsTrailingOperator && cigarElements.get(cigarElements.size()-1).getOperator()==CigarOperator.S) {
+            clippedNBasesFromEnd = cigarElements.get(cigarElements.size()-1).getLength();
+        }
         result.add(new AlignmentRegion(oneRegion.assemblyId, oneRegion.contigId, lastReferenceInterval, lastForwardStrandCigar,
                 oneRegion.forwardStrand, originalMapQ, SVConstants.CallingStepConstants.ARTIFICIAL_MISMATCH,
-                contigIntervalStart, oneRegion.assembledContigLength-SVVariantCallerUtils.getNumClippedBases(false, oneRegion.forwardStrandCigar)));
+                contigIntervalStart, oneRegion.assembledContigLength-clippedNBasesFromEnd));
 
         return result;
+    }
+
+    private static boolean parseCigarAndConvertTrailingInsertionToSoftClip(final Cigar cigarAlongInput5to3Direction,
+                                                                           final List<CigarElement> emptyTargetCollection) {
+
+        emptyTargetCollection.addAll(cigarAlongInput5to3Direction.getCigarElements());
+        if (emptyTargetCollection.size()==1) return false;
+
+        if ( (emptyTargetCollection.get(0).getOperator().isClipping() && emptyTargetCollection.get(1).getOperator().isIndel()) ||
+                (emptyTargetCollection.get(emptyTargetCollection.size()-1).getOperator().isClipping() && emptyTargetCollection.get(emptyTargetCollection.size()-2).getOperator().isIndel()) ) {
+            throw new GATKException("Unexpected cigar format with insertion neighboring clipping: " + cigarAlongInput5to3Direction.toString());
+        }
+
+        CigarElement element = emptyTargetCollection.get(0);
+        boolean cigarHasInsertionAsTrailingOperator = false;
+        if (element.getOperator() == CigarOperator.I) {
+            cigarHasInsertionAsTrailingOperator = true;
+            emptyTargetCollection.set(0, new CigarElement(element.getLength(), CigarOperator.S));
+        }
+        element = emptyTargetCollection.get(emptyTargetCollection.size()-1);
+        if (element.getOperator() == CigarOperator.I) {
+            cigarHasInsertionAsTrailingOperator = true;
+            emptyTargetCollection.set(emptyTargetCollection.size()-1, new CigarElement(element.getLength(), CigarOperator.S));
+        }
+
+        return cigarHasInsertionAsTrailingOperator;
     }
 
     private static void debugStats(final JavaPairRDD<Tuple2<String, String>, Iterable<AlignmentRegion>> alignmentRegionsWithContigSequences, final String outPrefix) {

@@ -15,7 +15,7 @@ public class AlignmentRegionUnitTest {
         Assert.assertEquals(ar1p1.startInAssembledContig, 1);
         Assert.assertEquals(ar1p1.endInAssembledContig, 4);
         Assert.assertTrue(ar1p1.forwardStrand);
-        Assert.assertEquals(ar1p1.forwardStrandCigar, TextCigarCodec.decode("4M4S"));
+        Assert.assertEquals(ar1p1.cigarAlong5to3DirectionOfContig, TextCigarCodec.decode("4M4S"));
         Assert.assertEquals(ar1p1.assembledContigLength, 8);
         Assert.assertEquals(ar1p1.mismatches, 0);
 
@@ -24,7 +24,7 @@ public class AlignmentRegionUnitTest {
         Assert.assertEquals(ar1p2.startInAssembledContig, 5);
         Assert.assertEquals(ar1p2.endInAssembledContig, 8);
         Assert.assertFalse(ar1p2.forwardStrand);
-        Assert.assertEquals(ar1p2.forwardStrandCigar, TextCigarCodec.decode("4H4M"));
+        Assert.assertEquals(ar1p2.cigarAlong5to3DirectionOfContig, TextCigarCodec.decode("4H4M"));
         Assert.assertEquals(ar1p2.assembledContigLength, 8);
         Assert.assertEquals(ar1p2.mismatches, 1);
 
@@ -33,7 +33,7 @@ public class AlignmentRegionUnitTest {
         Assert.assertEquals(ar2p1.startInAssembledContig, 5);
         Assert.assertEquals(ar2p1.endInAssembledContig, 8);
         Assert.assertFalse(ar2p1.forwardStrand);
-        Assert.assertEquals(ar2p1.forwardStrandCigar, TextCigarCodec.decode("4S4M"));
+        Assert.assertEquals(ar2p1.cigarAlong5to3DirectionOfContig, TextCigarCodec.decode("4S4M"));
         Assert.assertEquals(ar2p1.assembledContigLength, 8);
         Assert.assertEquals(ar2p1.mismatches, 0);
 
@@ -42,7 +42,7 @@ public class AlignmentRegionUnitTest {
         Assert.assertEquals(ar2p2.startInAssembledContig, 1);
         Assert.assertEquals(ar2p2.endInAssembledContig, 4);
         Assert.assertTrue(ar2p2.forwardStrand);
-        Assert.assertEquals(ar2p2.forwardStrandCigar, TextCigarCodec.decode("4M4H"));
+        Assert.assertEquals(ar2p2.cigarAlong5to3DirectionOfContig, TextCigarCodec.decode("4M4H"));
         Assert.assertEquals(ar2p1.assembledContigLength, 8);
         Assert.assertEquals(ar2p2.mismatches, 0);
     }
@@ -64,7 +64,7 @@ public class AlignmentRegionUnitTest {
         final AlignmentRegion region1 = AlignmentRegion.fromString(line.split(AlignmentRegion.STRING_REP_SEPARATOR, -1));
         Assert.assertEquals(region1.referenceInterval, new SimpleInterval("1", 7043012, 7044153));
         Assert.assertTrue(region1.forwardStrand);
-        Assert.assertEquals(region1.forwardStrandCigar.toString(), "1141M1357S");
+        Assert.assertEquals(region1.cigarAlong5to3DirectionOfContig.toString(), "1141M1357S");
         Assert.assertEquals(region1.mapQual, 60);
         Assert.assertEquals(region1.startInAssembledContig, 1);
         Assert.assertEquals(region1.endInAssembledContig, 1141);
@@ -74,7 +74,7 @@ public class AlignmentRegionUnitTest {
         final AlignmentRegion region2 = AlignmentRegion.fromString(line2.split(AlignmentRegion.STRING_REP_SEPARATOR, -1));
         Assert.assertEquals(region2.referenceInterval, new SimpleInterval("1", 7044151, 7045306));
         Assert.assertTrue(region2.forwardStrand);
-        Assert.assertEquals(region2.forwardStrandCigar.toString(), "1343S1155M");
+        Assert.assertEquals(region2.cigarAlong5to3DirectionOfContig.toString(), "1343S1155M");
         Assert.assertEquals(region2.mapQual, 60);
         Assert.assertEquals(region2.startInAssembledContig, 1344);
         Assert.assertEquals(region2.endInAssembledContig, 2498);

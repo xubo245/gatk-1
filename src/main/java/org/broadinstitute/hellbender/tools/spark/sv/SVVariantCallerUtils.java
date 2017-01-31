@@ -36,7 +36,7 @@ final class SVVariantCallerUtils {
     }
 
     /**
-     * Returns the number of clipped bases, including both soft and hard, represented in {@code forwardStrandCigar}
+     * Returns the number of clipped bases, including both soft and hard, represented in {@code cigarAlong5to3DirectionOfContig}
      * from the start or from the end
      * @param fromStart             from the start of the template or not
      * @param forwardStrandCigar    the {@link Cigar} in its forward strand representation

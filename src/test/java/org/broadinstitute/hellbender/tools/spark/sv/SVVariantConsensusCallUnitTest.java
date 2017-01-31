@@ -37,7 +37,8 @@ public class SVVariantConsensusCallUnitTest extends BaseTest {
     // -----------------------------------------------------------------------------------------------
     private static void seeIfItWorks_SvLen(final NovelAdjacencyReferenceLocations breakpoints,
                                            final int expectedSvLength) {
-        Assert.assertEquals(SVVariantConsensusCall.getSvLength(breakpoints), expectedSvLength);
+        Assert.assertEquals(SVVariantConsensusCall.getSvLength(breakpoints, GATKSVVCFHeaderLines.SVTYPES.valueOf((String)SVVariantConsensusCall.getType(breakpoints).get(GATKSVVCFHeaderLines.SVTYPE))),
+                expectedSvLength);
     }
 
     @Test
@@ -51,7 +52,7 @@ public class SVVariantConsensusCallUnitTest extends BaseTest {
 
         // simple deletion
         breakpoints = SVCallerTestDataProvider.forSimpleDeletion_plus._3();
-        seeIfItWorks_SvLen(breakpoints, 20);
+        seeIfItWorks_SvLen(breakpoints, -20);
 
         // simple insertion
         breakpoints = SVCallerTestDataProvider.forSimpleInsertion_minus._3();
@@ -59,15 +60,15 @@ public class SVVariantConsensusCallUnitTest extends BaseTest {
 
         // long range substitution
         breakpoints = SVCallerTestDataProvider.forLongRangeSubstitution_plus._3();
-        seeIfItWorks_SvLen(breakpoints, 20);
+        seeIfItWorks_SvLen(breakpoints, -20);
 
         // simple deletion with homology
         breakpoints = SVCallerTestDataProvider.forDeletionWithHomology_minus._3();
-        seeIfItWorks_SvLen(breakpoints, 38);
+        seeIfItWorks_SvLen(breakpoints, -38);
 
         // simple tandem dup contraction from 2 units to 1 unit
         breakpoints = SVCallerTestDataProvider.forSimpleTanDupContraction_plus._3();
-        seeIfItWorks_SvLen(breakpoints, 10);
+        seeIfItWorks_SvLen(breakpoints, -10);
 
         // simple tandem dup expansion from 1 unit to 2 units
         breakpoints = SVCallerTestDataProvider.forSimpleTanDupExpansion_minus._3();
@@ -83,11 +84,11 @@ public class SVVariantConsensusCallUnitTest extends BaseTest {
 
         // tandem dup contraction from 2 units to 1 unit with pseudo-homology
         breakpoints = SVCallerTestDataProvider.forComplexTanDup_2to1_pseudoHom_plus._3();
-        seeIfItWorks_SvLen(breakpoints, 96);
+        seeIfItWorks_SvLen(breakpoints, -96);
 
         // tandem dup contraction from 3 units to 2 units
         breakpoints = SVCallerTestDataProvider.forComplexTanDup_3to2_noPseudoHom_minus._3();
-        seeIfItWorks_SvLen(breakpoints, 96);
+        seeIfItWorks_SvLen(breakpoints, -96);
 
         // tandem dup expansion from 2 units to 3 units
         breakpoints = SVCallerTestDataProvider.forComplexTanDup_2to3_noPseudoHom_plus._3();
@@ -176,11 +177,11 @@ public class SVVariantConsensusCallUnitTest extends BaseTest {
 
         // inversion
         NovelAdjacencyReferenceLocations breakpoints = SVCallerTestDataProvider.forSimpleInversionFromLongCtg1WithStrangeLeftBreakpoint._3();
-        seeIfItWorks_idProduction(SVVariantConsensusCall.produceVariantId(breakpoints, GATKSVVCFHeaderLines.SVTYPES.INV), GATKSVVCFHeaderLines.INV_3_TO_5,
+        seeIfItWorks_idProduction(SVVariantConsensusCall.produceVariantId(breakpoints, GATKSVVCFHeaderLines.SVTYPES.INV), GATKSVVCFHeaderLines.INV33,
                 breakpoints.leftJustifiedLeftRefLoc.getContig(), String.valueOf(breakpoints.leftJustifiedLeftRefLoc.getEnd()), String.valueOf(breakpoints.leftJustifiedRightRefLoc.getStart()));
 
         breakpoints = SVCallerTestDataProvider.forSimpleInversionWithHom_leftMinus._3();
-        seeIfItWorks_idProduction(SVVariantConsensusCall.produceVariantId(breakpoints, GATKSVVCFHeaderLines.SVTYPES.INV), GATKSVVCFHeaderLines.INV_5_TO_3,
+        seeIfItWorks_idProduction(SVVariantConsensusCall.produceVariantId(breakpoints, GATKSVVCFHeaderLines.SVTYPES.INV), GATKSVVCFHeaderLines.INV55,
                 breakpoints.leftJustifiedLeftRefLoc.getContig(), String.valueOf(breakpoints.leftJustifiedLeftRefLoc.getEnd()), String.valueOf(breakpoints.leftJustifiedRightRefLoc.getStart()));
 
         // simple deletion
@@ -205,7 +206,7 @@ public class SVVariantConsensusCallUnitTest extends BaseTest {
 
         // simple tandem dup contraction from 2 units to 1 unit
         breakpoints = SVCallerTestDataProvider.forSimpleTanDupContraction_minus._3();
-        seeIfItWorks_idProduction(SVVariantConsensusCall.produceVariantId(breakpoints, GATKSVVCFHeaderLines.SVTYPES.DEL), GATKSVVCFHeaderLines.SVTYPES.DEL.name()+"_"+GATKSVVCFHeaderLines.SVTYPES.DUP.name()+"_"+ SVConstants.CallingStepConstants.TANDUP_CONTRACTION_STRING,
+        seeIfItWorks_idProduction(SVVariantConsensusCall.produceVariantId(breakpoints, GATKSVVCFHeaderLines.SVTYPES.DEL), GATKSVVCFHeaderLines.SVTYPES.DEL.name()+"-"+GATKSVVCFHeaderLines.SVTYPES.DUP.name()+"-"+ SVConstants.CallingStepConstants.TANDUP_CONTRACTION_STRING,
                 breakpoints.leftJustifiedLeftRefLoc.getContig(), String.valueOf(breakpoints.leftJustifiedLeftRefLoc.getEnd()), String.valueOf(breakpoints.leftJustifiedRightRefLoc.getStart()));
 
         // simple tandem dup expansion from 1 unit to 2 units
@@ -215,27 +216,27 @@ public class SVVariantConsensusCallUnitTest extends BaseTest {
 
         // simple tandem dup expansion from 1 unit to 2 units and novel insertion
         breakpoints = SVCallerTestDataProvider.forSimpleTanDupExpansionWithNovelIns_minus._3();
-        seeIfItWorks_idProduction(SVVariantConsensusCall.produceVariantId(breakpoints, GATKSVVCFHeaderLines.SVTYPES.INS), GATKSVVCFHeaderLines.SVTYPES.INS.name()+"_"+GATKSVVCFHeaderLines.SVTYPES.DUP.name()+"_"+ SVConstants.CallingStepConstants.TANDUP_EXPANSION_STRING,
+        seeIfItWorks_idProduction(SVVariantConsensusCall.produceVariantId(breakpoints, GATKSVVCFHeaderLines.SVTYPES.INS), GATKSVVCFHeaderLines.SVTYPES.INS.name()+"-"+GATKSVVCFHeaderLines.SVTYPES.DUP.name()+"-"+ SVConstants.CallingStepConstants.TANDUP_EXPANSION_STRING,
                 breakpoints.leftJustifiedLeftRefLoc.getContig(), String.valueOf(breakpoints.leftJustifiedLeftRefLoc.getEnd()), String.valueOf(breakpoints.leftJustifiedRightRefLoc.getStart()));
 
         // tandem dup expansion from 1 unit to 2 units with pseudo-homology
         breakpoints = SVCallerTestDataProvider.forComplexTanDup_1to2_pseudoHom_plus._3();
-        seeIfItWorks_idProduction(SVVariantConsensusCall.produceVariantId(breakpoints, GATKSVVCFHeaderLines.SVTYPES.INS), GATKSVVCFHeaderLines.SVTYPES.INS.name()+"_"+GATKSVVCFHeaderLines.SVTYPES.DUP.name()+"_"+ SVConstants.CallingStepConstants.TANDUP_EXPANSION_STRING,
+        seeIfItWorks_idProduction(SVVariantConsensusCall.produceVariantId(breakpoints, GATKSVVCFHeaderLines.SVTYPES.INS), GATKSVVCFHeaderLines.SVTYPES.INS.name()+"-"+GATKSVVCFHeaderLines.SVTYPES.DUP.name()+"-"+ SVConstants.CallingStepConstants.TANDUP_EXPANSION_STRING,
                 breakpoints.leftJustifiedLeftRefLoc.getContig(), String.valueOf(breakpoints.leftJustifiedLeftRefLoc.getEnd()), String.valueOf(breakpoints.leftJustifiedRightRefLoc.getStart()));
 
         // tandem dup contraction from 2 units to 1 unit with pseudo-homology
         breakpoints = SVCallerTestDataProvider.forComplexTanDup_2to1_pseudoHom_minus._3();
-        seeIfItWorks_idProduction(SVVariantConsensusCall.produceVariantId(breakpoints, GATKSVVCFHeaderLines.SVTYPES.DEL), GATKSVVCFHeaderLines.SVTYPES.DEL.name()+"_"+GATKSVVCFHeaderLines.SVTYPES.DUP.name()+"_"+ SVConstants.CallingStepConstants.TANDUP_CONTRACTION_STRING,
+        seeIfItWorks_idProduction(SVVariantConsensusCall.produceVariantId(breakpoints, GATKSVVCFHeaderLines.SVTYPES.DEL), GATKSVVCFHeaderLines.SVTYPES.DEL.name()+"-"+GATKSVVCFHeaderLines.SVTYPES.DUP.name()+"-"+ SVConstants.CallingStepConstants.TANDUP_CONTRACTION_STRING,
                 breakpoints.leftJustifiedLeftRefLoc.getContig(), String.valueOf(breakpoints.leftJustifiedLeftRefLoc.getEnd()), String.valueOf(breakpoints.leftJustifiedRightRefLoc.getStart()));
 
         // tandem dup contraction from 3 units to 2 units
         breakpoints = SVCallerTestDataProvider.forComplexTanDup_3to2_noPseudoHom_plus._3();
-        seeIfItWorks_idProduction(SVVariantConsensusCall.produceVariantId(breakpoints, GATKSVVCFHeaderLines.SVTYPES.DEL), GATKSVVCFHeaderLines.SVTYPES.DEL.name()+"_"+GATKSVVCFHeaderLines.SVTYPES.DUP.name()+"_"+ SVConstants.CallingStepConstants.TANDUP_CONTRACTION_STRING,
+        seeIfItWorks_idProduction(SVVariantConsensusCall.produceVariantId(breakpoints, GATKSVVCFHeaderLines.SVTYPES.DEL), GATKSVVCFHeaderLines.SVTYPES.DEL.name()+"-"+GATKSVVCFHeaderLines.SVTYPES.DUP.name()+"-"+ SVConstants.CallingStepConstants.TANDUP_CONTRACTION_STRING,
                 breakpoints.leftJustifiedLeftRefLoc.getContig(), String.valueOf(breakpoints.leftJustifiedLeftRefLoc.getEnd()), String.valueOf(breakpoints.leftJustifiedRightRefLoc.getStart()));
 
         // tandem dup expansion from 2 units to 3 units
         breakpoints = SVCallerTestDataProvider.forComplexTanDup_2to3_noPseudoHom_minus._3();
-        seeIfItWorks_idProduction(SVVariantConsensusCall.produceVariantId(breakpoints, GATKSVVCFHeaderLines.SVTYPES.INS), GATKSVVCFHeaderLines.SVTYPES.INS.name()+"_"+GATKSVVCFHeaderLines.SVTYPES.DUP.name()+"_"+ SVConstants.CallingStepConstants.TANDUP_EXPANSION_STRING,
+        seeIfItWorks_idProduction(SVVariantConsensusCall.produceVariantId(breakpoints, GATKSVVCFHeaderLines.SVTYPES.INS), GATKSVVCFHeaderLines.SVTYPES.INS.name()+"-"+GATKSVVCFHeaderLines.SVTYPES.DUP.name()+"-"+ SVConstants.CallingStepConstants.TANDUP_EXPANSION_STRING,
                 breakpoints.leftJustifiedLeftRefLoc.getContig(), String.valueOf(breakpoints.leftJustifiedLeftRefLoc.getEnd()), String.valueOf(breakpoints.leftJustifiedRightRefLoc.getStart()));
     }
 
@@ -255,10 +256,10 @@ public class SVVariantConsensusCallUnitTest extends BaseTest {
 
         // inversion
         NovelAdjacencyReferenceLocations breakpoints = SVCallerTestDataProvider.forSimpleInversionFromLongCtg1WithStrangeLeftBreakpoint._3();
-        seeIfItWorks_typeInference(breakpoints, ImmutableMap.of(GATKSVVCFHeaderLines.SVTYPE, GATKSVVCFHeaderLines.SVTYPES.INV.name(), GATKSVVCFHeaderLines.INV_3_TO_5, ""));
+        seeIfItWorks_typeInference(breakpoints, ImmutableMap.of(GATKSVVCFHeaderLines.SVTYPE, GATKSVVCFHeaderLines.SVTYPES.INV.name(), GATKSVVCFHeaderLines.INV33, ""));
 
         breakpoints = SVCallerTestDataProvider.forSimpleInversionWithHom_leftPlus._3();
-        seeIfItWorks_typeInference(breakpoints, ImmutableMap.of(GATKSVVCFHeaderLines.SVTYPE, GATKSVVCFHeaderLines.SVTYPES.INV.name(), GATKSVVCFHeaderLines.INV_5_TO_3, ""));
+        seeIfItWorks_typeInference(breakpoints, ImmutableMap.of(GATKSVVCFHeaderLines.SVTYPE, GATKSVVCFHeaderLines.SVTYPES.INV.name(), GATKSVVCFHeaderLines.INV55, ""));
 
         // simple deletion
         breakpoints = SVCallerTestDataProvider.forSimpleDeletion_plus._3();
@@ -426,7 +427,7 @@ public class SVVariantConsensusCallUnitTest extends BaseTest {
         Tuple3<AlignmentRegion, AlignmentRegion, NovelAdjacencyReferenceLocations> testData = SVCallerTestDataProvider.forSimpleInversionFromLongCtg1WithStrangeLeftBreakpoint;
 
         seeIfItWorks_integrative(testData, Stream.concat( commonAttributes.stream(),
-                Sets.newHashSet(GATKSVVCFHeaderLines.INV_3_TO_5, GATKSVVCFHeaderLines.HOMOLOGY, GATKSVVCFHeaderLines.HOMOLOGY_LENGTH).stream()).collect(Collectors.toSet()));
+                Sets.newHashSet(GATKSVVCFHeaderLines.INV33, GATKSVVCFHeaderLines.HOMOLOGY, GATKSVVCFHeaderLines.HOMOLOGY_LENGTH).stream()).collect(Collectors.toSet()));
 
         // simple deletion
         testData = SVCallerTestDataProvider.forSimpleDeletion_minus;
