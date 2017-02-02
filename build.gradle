@@ -55,7 +55,7 @@ repositories {
 
 }
 
-final htsjdkVersion = System.getProperty('htsjdk.version','2.9.0-1-g55bf01b-20170217.164935-1')
+final htsjdkVersion = System.getProperty('htsjdk.version','2.9.1')
 final sparkVersion = System.getProperty('spark.version', '2.0.2')
 final hadoopBamVersion = System.getProperty('hadoopBam.version','7.7.1')
 
@@ -176,7 +176,7 @@ dependencies {
     // Dependency change for including MLLib
     compile('com.esotericsoftware:reflectasm:1.10.0:shaded')
 
-    compile('com.intel.gkl:gkl:0.1.2') {
+    compile('com.intel.gkl:gkl:0.4.1') {
         exclude module: 'htsjdk'
     }
 
