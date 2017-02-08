@@ -49,17 +49,16 @@ class SVVariantConsensusCall implements Serializable {
         Utils.validateArg(start<=end,
                 "An identified breakpoint pair has left breakpoint positioned to the right of right breakpoint: " + novelAdjacencyReferenceLocations.toString());
 
-        final Map<String, Object> typeAnnotations = getType(novelAdjacencyReferenceLocations);
-        final GATKSVVCFHeaderLines.SVTYPES svtype = GATKSVVCFHeaderLines.SVTYPES.valueOf((String)typeAnnotations.get(GATKSVVCFHeaderLines.SVTYPE));
-
+        final SVTYPE svtype = getType(novelAdjacencyReferenceLocations);
         final VariantContextBuilder vcBuilder = new VariantContextBuilder()
                 .chr(contig).start(start).stop(end)
                 .alleles(produceAlleles(novelAdjacencyReferenceLocations, broadcastReference.getValue(), svtype))
-                .id(produceVariantId(novelAdjacencyReferenceLocations, svtype))
+                .id(svtype.getVariantId())
                 .attribute(VCFConstants.END_KEY, end)
-                .attribute(GATKSVVCFHeaderLines.SVLEN, getSvLength(novelAdjacencyReferenceLocations, svtype));
+                .attribute(GATKSVVCFHeaderLines.SVTYPE, svtype.toString())
+                .attribute(GATKSVVCFHeaderLines.SVLEN, svtype.getSVLength());
 
-        typeAnnotations.forEach(vcBuilder::attribute);
+        setFlags(novelAdjacencyReferenceLocations, svtype).forEach(vcBuilder::attribute);
         parseComplicationsAndMakeThemAttributeMap(novelAdjacencyReferenceLocations).forEach(vcBuilder::attribute);
         getEvidenceRelatedAnnotations(evidence).forEach(vcBuilder::attribute);
 
@@ -68,7 +67,7 @@ class SVVariantConsensusCall implements Serializable {
 
     // TODO: 12/13/16 again ignoring translocation
     @VisibleForTesting
-    static List<Allele> produceAlleles(final NovelAdjacencyReferenceLocations novelAdjacencyReferenceLocations, final ReferenceMultiSource reference, final GATKSVVCFHeaderLines.SVTYPES svtype)
+    static List<Allele> produceAlleles(final NovelAdjacencyReferenceLocations novelAdjacencyReferenceLocations, final ReferenceMultiSource reference, final SVTYPE svtype)
             throws IOException {
 
         final String contig = novelAdjacencyReferenceLocations.leftJustifiedLeftRefLoc.getContig();
@@ -76,78 +75,7 @@ class SVVariantConsensusCall implements Serializable {
 
         final Allele refAllele = Allele.create(new String(reference.getReferenceBases(null, new SimpleInterval(contig, start, start)).getBases()), true);
 
-        final Allele altAllele;
-        switch (svtype){
-            case INV:
-                altAllele = Allele.create(SVConstants.CallingStepConstants.VCF_ALT_ALLELE_STRING_INV);
-                break;
-            case INS:
-                altAllele = Allele.create(SVConstants.CallingStepConstants.VCF_ALT_ALLELE_STRING_INS);
-                break;
-            case DEL:
-                altAllele = Allele.create(SVConstants.CallingStepConstants.VCF_ALT_ALLELE_STRING_DEL);
-                break;
-            case DUP:
-                altAllele = Allele.create(SVConstants.CallingStepConstants.VCF_ALT_ALLELE_STRING_DUP);
-                break;
-            default:
-                throw new GATKException("Unsupported SV type yet!");
-        }
-
-        return new ArrayList<>(Arrays.asList(refAllele, altAllele));
-    }
-
-    // TODO: 12/15/16 does not handle translocations
-    @VisibleForTesting
-    static String produceVariantId(final NovelAdjacencyReferenceLocations novelAdjacencyReferenceLocations, final GATKSVVCFHeaderLines.SVTYPES svtype) {
-
-        final String contig = novelAdjacencyReferenceLocations.leftJustifiedLeftRefLoc.getContig();
-        final int start = novelAdjacencyReferenceLocations.leftJustifiedLeftRefLoc.getEnd();
-        final int end = novelAdjacencyReferenceLocations.leftJustifiedRightRefLoc.getStart();
-        final NovelAdjacencyReferenceLocations.EndConnectionType endConnectionType = novelAdjacencyReferenceLocations.endConnectionType;
-
-        final String startString;
-        switch (svtype){
-            case INV:
-                startString = (endConnectionType == FIVE_TO_FIVE ? GATKSVVCFHeaderLines.INV55 : GATKSVVCFHeaderLines.INV33);
-                break;
-            case INS: case DEL:
-                if (novelAdjacencyReferenceLocations.complication.dupSeqForwardStrandRep.isEmpty()) {
-                    startString = svtype.name();
-                } else {
-                    startString = svtype.name() + "-DUP-" +
-                            ((novelAdjacencyReferenceLocations.complication.dupSeqRepeatNumOnRef < novelAdjacencyReferenceLocations.complication.dupSeqRepeatNumOnCtg) ? SVConstants.CallingStepConstants.TANDUP_EXPANSION_STRING : SVConstants.CallingStepConstants.TANDUP_CONTRACTION_STRING);
-                }
-                break;
-            case DUP:
-                startString = svtype.name() +
-                        ((novelAdjacencyReferenceLocations.complication.dupSeqRepeatNumOnRef < novelAdjacencyReferenceLocations.complication.dupSeqRepeatNumOnCtg) ? SVConstants.CallingStepConstants.TANDUP_EXPANSION_STRING : SVConstants.CallingStepConstants.TANDUP_CONTRACTION_STRING);
-                break;
-            default:
-                throw new GATKException("Unsupported SV type yet!");
-        }
-
-        return  startString + SVConstants.CallingStepConstants.VARIANT_ID_FIELD_SEPARATOR +
-                contig + SVConstants.CallingStepConstants.VARIANT_ID_FIELD_SEPARATOR + start + SVConstants.CallingStepConstants.VARIANT_ID_FIELD_SEPARATOR + end;
-    }
-
-    // TODO: 12/14/16 does not work for simple translocation
-    @VisibleForTesting
-    static int getSvLength(final NovelAdjacencyReferenceLocations breakpoints, GATKSVVCFHeaderLines.SVTYPES svtype) {
-        final int start = breakpoints.leftJustifiedLeftRefLoc.getEnd();
-        final int end = breakpoints.leftJustifiedRightRefLoc.getStart();
-
-        switch (svtype) {
-            case INV:
-                return end - start;
-            case DEL:
-                return start - end;
-            case INS:case DUP:
-                return breakpoints.complication.insertedSequenceForwardStrandRep.length()
-                        + (breakpoints.complication.dupSeqRepeatNumOnCtg - breakpoints.complication.dupSeqRepeatNumOnRef)*breakpoints.complication.dupSeqForwardStrandRep.length();
-            default:
-                    throw new GATKException("Unsupported SV type yet!");
-        }
+        return new ArrayList<>(Arrays.asList(refAllele, svtype.getAltAllele()));
     }
 
     // TODO: 12/14/16 sv type specific attributes below, to be generalized and refactored later
@@ -155,15 +83,13 @@ class SVVariantConsensusCall implements Serializable {
      * Infer type of the variant, and produce an Id for the variant appropriately considering the complications.
      */
     @VisibleForTesting
-    static Map<String, Object> getType(final NovelAdjacencyReferenceLocations novelAdjacencyReferenceLocations) {
+    static SVTYPE getType(final NovelAdjacencyReferenceLocations novelAdjacencyReferenceLocations) {
 
         final int start = novelAdjacencyReferenceLocations.leftJustifiedLeftRefLoc.getEnd();
         final int end = novelAdjacencyReferenceLocations.leftJustifiedRightRefLoc.getStart();
         final NovelAdjacencyReferenceLocations.EndConnectionType endConnectionType = novelAdjacencyReferenceLocations.endConnectionType;
 
-        final Map<String, Object> attributeMap = new HashMap<>();
-
-        final GATKSVVCFHeaderLines.SVTYPES type;
+        final SVTYPE type;
         if (endConnectionType == FIVE_TO_THREE) { // no strand switch happening, so no inversion
             if (start==end) { // something is inserted
                 final boolean hasNoDupSeq = novelAdjacencyReferenceLocations.complication.dupSeqForwardStrandRep.isEmpty();
@@ -172,13 +98,13 @@ class SVVariantConsensusCall implements Serializable {
                     if (hasNoInsertedSeq) {
                         throw new GATKException("Something went wrong in type inference, there's suspected insertion happening but no inserted sequence could be inferred " + novelAdjacencyReferenceLocations.toString());
                     } else {
-                        type = GATKSVVCFHeaderLines.SVTYPES.INS; // simple insertion (no duplication)
+                        type = new SVTYPE.INS(novelAdjacencyReferenceLocations); // simple insertion (no duplication)
                     }
                 } else {
                     if (hasNoInsertedSeq) {
-                        type = GATKSVVCFHeaderLines.SVTYPES.DUP; // clean expansion of repeat 1 -> 2, or complex expansion
+                        type = new SVTYPE.DUP(novelAdjacencyReferenceLocations); // clean expansion of repeat 1 -> 2, or complex expansion
                     } else {
-                        type = GATKSVVCFHeaderLines.SVTYPES.DUP; // expansion of 1 repeat on ref to 2 repeats on alt with inserted sequence in between the 2 repeats
+                        type = new SVTYPE.DUP(novelAdjacencyReferenceLocations); // expansion of 1 repeat on ref to 2 repeats on alt with inserted sequence in between the 2 repeats
                     }
                 }
             } else {
@@ -186,27 +112,41 @@ class SVVariantConsensusCall implements Serializable {
                 final boolean hasNoInsertedSeq = novelAdjacencyReferenceLocations.complication.insertedSequenceForwardStrandRep.isEmpty();
                 if (hasNoDupSeq) {
                     if (hasNoInsertedSeq) {
-                        type = GATKSVVCFHeaderLines.SVTYPES.DEL; // clean deletion
+                        type = new SVTYPE.DEL(novelAdjacencyReferenceLocations); // clean deletion
                     } else {
-                        type = GATKSVVCFHeaderLines.SVTYPES.DEL; // scarred deletion
+                        type = new SVTYPE.DEL(novelAdjacencyReferenceLocations); // scarred deletion
                     }
                 } else {
                     if (hasNoInsertedSeq) {
-                        type = GATKSVVCFHeaderLines.SVTYPES.DEL; // clean contraction of repeat 2 -> 1, or complex contraction
+                        type = new SVTYPE.DEL(novelAdjacencyReferenceLocations); // clean contraction of repeat 2 -> 1, or complex contraction
                     } else {
                         throw new GATKException("Something went wrong in type inference, there's suspected deletion happening but both inserted sequence and duplication exits (not supported yet): " + novelAdjacencyReferenceLocations.toString());
                     }
                 }
             }
-            attributeMap.put(GATKSVVCFHeaderLines.SVTYPE, type.name());
-            if(!novelAdjacencyReferenceLocations.complication.dupSeqForwardStrandRep.isEmpty())
-                attributeMap.put( (novelAdjacencyReferenceLocations.complication.dupSeqRepeatNumOnRef < novelAdjacencyReferenceLocations.complication.dupSeqRepeatNumOnCtg) ? SVConstants.CallingStepConstants.TANDUP_EXPANSION_STRING : SVConstants.CallingStepConstants.TANDUP_CONTRACTION_STRING, "");
         } else {
-            type = GATKSVVCFHeaderLines.SVTYPES.INV;
-            attributeMap.put(GATKSVVCFHeaderLines.SVTYPE, type.name());
-            attributeMap.put( (endConnectionType == FIVE_TO_FIVE) ? GATKSVVCFHeaderLines.INV55 : GATKSVVCFHeaderLines.INV33, "");
+            type = new SVTYPE.INV(novelAdjacencyReferenceLocations);
         }
-        return attributeMap;
+
+        // developer check to make sure new types are treated correctly
+        try {
+            final SVTYPE.RECOGNIZED_SVTYPES x = SVTYPE.RECOGNIZED_SVTYPES.valueOf(type.toString());
+        } catch (final IllegalArgumentException ex) {
+            throw new GATKException.ShouldNeverReachHereException("Inferred type is not known yet: " + type.toString(), ex);
+        }
+        return type;
+    }
+
+    @VisibleForTesting
+    static Map<String, String> setFlags(final NovelAdjacencyReferenceLocations novelAdjacencyReferenceLocations, final SVTYPE svtype) {
+        final Map<String, String> flagKeysAndDummyValue = new HashMap<>(2);
+        if (svtype instanceof SVTYPE.INV) {
+            flagKeysAndDummyValue.put((novelAdjacencyReferenceLocations.endConnectionType == FIVE_TO_FIVE) ? GATKSVVCFHeaderLines.INV55 : GATKSVVCFHeaderLines.INV33, "");
+        } else if (svtype instanceof SVTYPE.DEL || svtype instanceof SVTYPE.INS || svtype instanceof SVTYPE.DUP) {
+            if(!novelAdjacencyReferenceLocations.complication.dupSeqForwardStrandRep.isEmpty())
+                flagKeysAndDummyValue.put( (novelAdjacencyReferenceLocations.complication.dupSeqRepeatNumOnRef < novelAdjacencyReferenceLocations.complication.dupSeqRepeatNumOnCtg) ? SVConstants.CallingStepConstants.TANDUP_EXPANSION_STRING : SVConstants.CallingStepConstants.TANDUP_CONTRACTION_STRING, "");
+        }
+        return flagKeysAndDummyValue;
     }
 
     /**

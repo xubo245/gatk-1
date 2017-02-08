@@ -62,7 +62,4 @@ public class GATKSVVCFHeaderLines {
         vcfHeaderLines.put(DUPLICATION_NUMBERS, new VCFInfoHeaderLine(DUPLICATION_NUMBERS, VCFHeaderLineCount.R, VCFHeaderLineType.Integer, "Number of times the sequence is duplicated on reference and on the alternate alleles"));
     }
 
-    enum SVTYPES {
-        DEL, INS, DUP, INV, CNV, BND
-    }
 }

@@ -1,10 +1,14 @@
 package org.broadinstitute.hellbender.tools.spark.sv;
 
 import htsjdk.samtools.Cigar;
+import htsjdk.samtools.CigarElement;
 import htsjdk.samtools.TextCigarCodec;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.testng.Assert;
 import org.testng.annotations.Test;
+
+import java.util.Collections;
+import java.util.List;
 
 
 public class SVVariantCallerUtilsUnitTest {
@@ -49,5 +53,36 @@ public class SVVariantCallerUtilsUnitTest {
         Assert.assertEquals(SVVariantCallerUtils.getTotalHardClipping(cigar), 25);
         Assert.assertEquals(SVVariantCallerUtils.getNumClippedBases(true, cigar), 24);
         Assert.assertEquals(SVVariantCallerUtils.getNumClippedBases(false, cigar), 26);
+    }
+
+    @Test(expectedExceptions=IllegalArgumentException.class)
+    public void testCigarChecker_emptyCigarElementList(){
+        @SuppressWarnings("unchecked")
+        final List<CigarElement> emptyList = Collections.EMPTY_LIST;
+        SVVariantCallerUtils.checkCigarElements(emptyList);
+    }
+
+    @Test(expectedExceptions=IllegalArgumentException.class)
+    public void testCigarChecker_deletionNeighboringClipping(){
+        SVVariantCallerUtils.checkCigarElements(TextCigarCodec.decode("10S10D10M").getCigarElements());
+    }
+
+    @Test(expectedExceptions=IllegalArgumentException.class)
+    public void testCigarChecker_only1NonAlignment(){
+        SVVariantCallerUtils.checkCigarElements(TextCigarCodec.decode("10S").getCigarElements());
+    }
+
+    @Test(expectedExceptions=IllegalArgumentException.class)
+    public void testCigarChecker_noAlignment(){
+        SVVariantCallerUtils.checkCigarElements(TextCigarCodec.decode("10H10S10I10S10H").getCigarElements());
+    }
+
+    @Test
+    public void testGetNumClippingBases_hardAndSoftSeparately() {
+        List<CigarElement> cigarElements = TextCigarCodec.decode("10H20S30M40D50M60S70H").getCigarElements();
+        Assert.assertEquals(SVVariantCallerUtils.getNumHardClippingBases(true, cigarElements), 10);
+        Assert.assertEquals(SVVariantCallerUtils.getNumHardClippingBases(false, cigarElements), 70);
+        Assert.assertEquals(SVVariantCallerUtils.getNumSoftClippingBases(true, cigarElements), 20);
+        Assert.assertEquals(SVVariantCallerUtils.getNumSoftClippingBases(false, cigarElements), 60);
     }
 }

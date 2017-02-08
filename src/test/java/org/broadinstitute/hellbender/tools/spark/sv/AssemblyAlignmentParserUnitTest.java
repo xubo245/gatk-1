@@ -82,7 +82,7 @@ public class AssemblyAlignmentParserUnitTest extends BaseTest{
     }
 
     @Test
-    public void testGappedAlignmentBreaker_TrailingInsertionOperatorToSoftClip() {
+    public void testGappedAlignmentBreaker_TerminalInsertionOperatorToSoftClip() {
 
         // beginning with 'I'
         Cigar cigar = TextCigarCodec.decode("10I10M5I10M");
@@ -120,6 +120,35 @@ public class AssemblyAlignmentParserUnitTest extends BaseTest{
     }
 
     @Test
+    public void testGappedAlignmentBreaker_TerminalInsertionNeighboringClippings(){
+
+        Cigar cigar = TextCigarCodec.decode("10H20S30I40M50I60S70H");
+        AlignmentRegion alignmentRegion = new AlignmentRegion("1", "contig-1",
+                new SimpleInterval("1", 101, 140), cigar,
+                true, 60, 0, 61, 100);
+        List<AlignmentRegion> generatedARList = Utils.stream(AssemblyAlignmentParser.breakGappedAlignment(alignmentRegion, 1)).collect(Collectors.toList());
+        // no internal gap, so nothing should change
+        Assert.assertEquals(generatedARList.size(), 1);
+        Assert.assertEquals(generatedARList.get(0), alignmentRegion);
+
+        cigar = TextCigarCodec.decode("10H20S30I40M5D15M50I60S70H");
+        alignmentRegion = new AlignmentRegion("1", "contig-1",
+                new SimpleInterval("1", 101, 160), cigar,
+                true, 60, 0, 61, 115);
+        generatedARList = Utils.stream(AssemblyAlignmentParser.breakGappedAlignment(alignmentRegion, 1)).collect(Collectors.toList());
+        Assert.assertEquals(generatedARList.size(), 2);
+
+        Assert.assertEquals(generatedARList.get(0), new AlignmentRegion("1", "contig-1",
+                new SimpleInterval("1", 101, 140), TextCigarCodec.decode("10H50S40M125S70H"),
+                true, 60,
+                SVConstants.CallingStepConstants.MISSING_NM, 61, 100));
+        Assert.assertEquals(generatedARList.get(1), new AlignmentRegion("1", "contig-1",
+                new SimpleInterval("1", 146, 160), TextCigarCodec.decode("10H90S15M110S70H"),
+                true, 60,
+                SVConstants.CallingStepConstants.MISSING_NM, 101, 115));
+    }
+
+    @Test
     public void testGappedAlignmentBreaker_NegativeStrand() {
         // read data with AlignmentRegion.toString():
         // 19149	contig-8	chrUn_JTFH01000557v1_decoy	21	1459	-	10S1044M122I395M75I	60	11	1646	200
@@ -141,27 +170,29 @@ public class AssemblyAlignmentParserUnitTest extends BaseTest{
     @Test
     public void testGappedAlignmentBreaker_ExpectException() {
         int exceptionCount = 0;
-        try {willThrowOnInvalidCigar(TextCigarCodec.decode("10H10I10M"));} catch (final GATKException ex) {++exceptionCount;}
-        try {willThrowOnInvalidCigar(TextCigarCodec.decode("10S10I10M"));} catch (final GATKException ex) {++exceptionCount;}
-        try {willThrowOnInvalidCigar(TextCigarCodec.decode("10M10I10S"));} catch (final GATKException ex) {++exceptionCount;}
-        try {willThrowOnInvalidCigar(TextCigarCodec.decode("10M10I10H"));} catch (final GATKException ex) {++exceptionCount;}
 
-        try {willThrowOnInvalidCigar(TextCigarCodec.decode("10H10D10M"));} catch (final GATKException ex) {++exceptionCount;}
-        try {willThrowOnInvalidCigar(TextCigarCodec.decode("10S10D10M"));} catch (final GATKException ex) {++exceptionCount;}
-        try {willThrowOnInvalidCigar(TextCigarCodec.decode("10M10D10S"));} catch (final GATKException ex) {++exceptionCount;}
-        try {willThrowOnInvalidCigar(TextCigarCodec.decode("10M10D10H"));} catch (final GATKException ex) {++exceptionCount;}
+        try {willThrowOnInvalidCigar(TextCigarCodec.decode("10H10D10M"));} catch (final Exception ex) {++exceptionCount;}
+        try {willThrowOnInvalidCigar(TextCigarCodec.decode("10S10D10M"));} catch (final Exception ex) {++exceptionCount;}
+        try {willThrowOnInvalidCigar(TextCigarCodec.decode("10M10D10S"));} catch (final Exception ex) {++exceptionCount;}
+        try {willThrowOnInvalidCigar(TextCigarCodec.decode("10M10D10H"));} catch (final Exception ex) {++exceptionCount;}
 
-        try{willThrowOnInvalidCigar(TextCigarCodec.decode("10H10I10S"));} catch (final GATKException ex) {++exceptionCount;}
-        try{willThrowOnInvalidCigar(TextCigarCodec.decode("10H10D10S"));} catch (final GATKException ex) {++exceptionCount;}
+        try{willThrowOnInvalidCigar(TextCigarCodec.decode("10H10I10S"));} catch (final Exception ex) {++exceptionCount;}
+        try{willThrowOnInvalidCigar(TextCigarCodec.decode("10H10D10S"));} catch (final Exception ex) {++exceptionCount;}
 
-        try{willThrowOnInvalidCigar(TextCigarCodec.decode("10H10I10M10D10S"));} catch (final GATKException ex) {++exceptionCount;}
-        try{willThrowOnInvalidCigar(TextCigarCodec.decode("10H10D10M10I10S"));} catch (final GATKException ex) {++exceptionCount;}
+        try{willThrowOnInvalidCigar(TextCigarCodec.decode("10H10I10M10D10S"));} catch (final Exception ex) {++exceptionCount;}
+        try{willThrowOnInvalidCigar(TextCigarCodec.decode("10H10D10M10I10S"));} catch (final Exception ex) {++exceptionCount;}
+
+        // these 4 are fine now
+        try {willThrowOnInvalidCigar(TextCigarCodec.decode("10H10I10M"));} catch (final Exception ex) {++exceptionCount;}
+        try {willThrowOnInvalidCigar(TextCigarCodec.decode("10S10I10M"));} catch (final Exception ex) {++exceptionCount;}
+        try {willThrowOnInvalidCigar(TextCigarCodec.decode("10M10I10S"));} catch (final Exception ex) {++exceptionCount;}
+        try {willThrowOnInvalidCigar(TextCigarCodec.decode("10M10I10H"));} catch (final Exception ex) {++exceptionCount;}
 
         // last two are valid
-        try{willThrowOnInvalidCigar(TextCigarCodec.decode("10H10M10I10M10S"));} catch (final GATKException ex) {++exceptionCount;}
-        try{willThrowOnInvalidCigar(TextCigarCodec.decode("10H10M10D10M10S"));} catch (final GATKException ex) {++exceptionCount;}
+        try{willThrowOnInvalidCigar(TextCigarCodec.decode("10H10M10I10M10S"));} catch (final Exception ex) {++exceptionCount;}
+        try{willThrowOnInvalidCigar(TextCigarCodec.decode("10H10M10D10M10S"));} catch (final Exception ex) {++exceptionCount;}
 
-        Assert.assertEquals(exceptionCount, 12);
+        Assert.assertEquals(exceptionCount, 8);
     }
 
     private static Iterable<AlignmentRegion> willThrowOnInvalidCigar(final Cigar cigar) throws GATKException {
